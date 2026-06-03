@@ -168,6 +168,13 @@ If installation times out, unlock the phone and allow USB app installation, then
 rerun the script. Some Android builds route adb installs through a confirmation
 screen before package commit.
 
+If the sample app is already installed and you only want to rerun the launch
+and native self-test check:
+
+```bash
+MFT_SDK_SMOKE_SKIP_INSTALL=1 bash scripts/android/run_mft_sdk_device_smoke.sh
+```
+
 ## Native Boundary
 
 The JNI bridge is intentionally thin:

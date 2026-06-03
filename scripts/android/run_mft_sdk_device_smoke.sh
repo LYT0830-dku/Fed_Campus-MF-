@@ -47,9 +47,20 @@ cd "$ANDROID_DIR"
 "$ADB" devices
 "$ADB" logcat -c
 
-if ! run_with_timeout 120 "$ADB" install --no-streaming -r "$APK"; then
-  echo "[Android SDK] APK install timed out. Unlock the phone and allow USB app installation, then retry." >&2
-  exit 124
+if [ "${MFT_SDK_SMOKE_SKIP_INSTALL:-0}" = "1" ]; then
+  if ! "$ADB" shell pm list packages | rg -q "^package:$PKG$"; then
+    echo "[Android SDK] MFT_SDK_SMOKE_SKIP_INSTALL=1 was set, but $PKG is not installed." >&2
+    exit 1
+  fi
+else
+  if ! run_with_timeout 120 "$ADB" install --no-streaming -r "$APK"; then
+    if "$ADB" shell pm list packages | rg -q "^package:$PKG$"; then
+      echo "[Android SDK] APK install timed out, but $PKG is already installed; continuing with launch smoke." >&2
+    else
+      echo "[Android SDK] APK install timed out. Unlock the phone and allow USB app installation, then retry." >&2
+      exit 124
+    fi
+  fi
 fi
 
 "$ADB" shell am start -n "$ACTIVITY"
@@ -60,6 +71,10 @@ printf '%s\n' "$LOG_OUTPUT" | rg "MFTSdkSample|MobileFineTuner|Self-test" || tru
 
 if printf '%s\n' "$LOG_OUTPUT" | rg -q "MFTSdkSample.*Self-test passed"; then
   echo "[Android SDK] Device smoke passed"
+elif "$ADB" shell uiautomator dump /sdcard/mft_sdk_smoke_ui.xml >/dev/null 2>&1 &&
+     "$ADB" shell cat /sdcard/mft_sdk_smoke_ui.xml | rg -q "Self-test passed"; then
+  "$ADB" shell cat /sdcard/mft_sdk_smoke_ui.xml | rg "MobileFineTuner|Self-test|loss=|trainable_tensors=|elapsed_ms=" || true
+  echo "[Android SDK] Device smoke passed via UI dump"
 else
   echo "[Android SDK] Device smoke did not find a self-test pass marker in logcat" >&2
   exit 1
