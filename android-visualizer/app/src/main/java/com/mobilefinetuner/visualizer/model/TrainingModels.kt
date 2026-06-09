@@ -108,6 +108,9 @@ data class RunnerStepResult(
     val loss: Float,
     val trainableTensorCount: Int,
     val validLabelCount: Int,
+    val accumulationStep: Int,
+    val gradientAccumulationSteps: Int,
+    val optimizerStep: Boolean,
     val elapsedMs: Long
 )
 
@@ -117,6 +120,8 @@ data class RunnerUiState(
     val selectedModelId: String? = null,
     val loadWeights: Boolean = true,
     val sequenceLength: Int = 2,
+    val batchSize: Int = 1,
+    val gradientAccumulationSteps: Int = 1,
     val steps: Int = 1,
     val trainingText: String = "MobileFineTuner foreground training smoke.",
     val importingModelName: String? = null,

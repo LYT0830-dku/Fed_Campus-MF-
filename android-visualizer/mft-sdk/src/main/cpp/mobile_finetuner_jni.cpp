@@ -326,7 +326,8 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeCreateTrainer(
         jfloat weight_decay,
         jfloat max_grad_norm,
         jint ignore_index,
-        jboolean use_streaming_lm_loss) {
+        jboolean use_streaming_lm_loss,
+        jint gradient_accumulation_steps) {
     guarded_void(env, [&]() {
         NativeSession* session = require_session(env, handle);
         if (session == nullptr) {
@@ -342,6 +343,7 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeCreateTrainer(
         config.max_grad_norm = max_grad_norm;
         config.ignore_index = ignore_index;
         config.use_streaming_lm_loss = use_streaming_lm_loss == JNI_TRUE;
+        config.gradient_accumulation_steps = gradient_accumulation_steps;
         session->trainer = std::make_unique<ops::AutoTrainer>(*session->model, config);
     });
 }
@@ -396,12 +398,16 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainStep(
         const ops::AutoTrainStepResult result =
             session->trainer->train_step(input_tensor, mask_tensor, label_tensor);
 
-        jdouble values[3] = {
+        jdouble values[7] = {
             static_cast<jdouble>(result.loss),
             static_cast<jdouble>(result.trainable_tensor_count),
-            static_cast<jdouble>(result.valid_label_count)
+            static_cast<jdouble>(result.valid_label_count),
+            static_cast<jdouble>(result.accumulated_loss),
+            static_cast<jdouble>(result.accumulation_step),
+            static_cast<jdouble>(result.gradient_accumulation_steps),
+            result.optimizer_step ? 1.0 : 0.0
         };
-        return make_double_array(env, values, 3);
+        return make_double_array(env, values, 7);
     }, static_cast<jdoubleArray>(nullptr));
 }
 
@@ -436,12 +442,16 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainTextBatch(
         auto batch = ops::make_causal_lm_batch(require_tokenizer(*session), rows, batch_cfg);
         const ops::AutoTrainStepResult result = session->trainer->train_step(batch);
 
-        jdouble values[3] = {
+        jdouble values[7] = {
             static_cast<jdouble>(result.loss),
             static_cast<jdouble>(result.trainable_tensor_count),
-            static_cast<jdouble>(result.valid_label_count)
+            static_cast<jdouble>(result.valid_label_count),
+            static_cast<jdouble>(result.accumulated_loss),
+            static_cast<jdouble>(result.accumulation_step),
+            static_cast<jdouble>(result.gradient_accumulation_steps),
+            result.optimizer_step ? 1.0 : 0.0
         };
-        return make_double_array(env, values, 3);
+        return make_double_array(env, values, 7);
     }, static_cast<jdoubleArray>(nullptr));
 }
 

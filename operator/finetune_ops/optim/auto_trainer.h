@@ -18,12 +18,17 @@ struct AutoTrainerConfig {
     float max_grad_norm = 1.0f;
     int ignore_index = -100;
     bool use_streaming_lm_loss = true;
+    int gradient_accumulation_steps = 1;
 };
 
 struct AutoTrainStepResult {
     float loss = 0.0f;
+    float accumulated_loss = 0.0f;
     int trainable_tensor_count = 0;
     int valid_label_count = 0;
+    int accumulation_step = 0;
+    int gradient_accumulation_steps = 1;
+    bool optimizer_step = true;
 };
 
 struct AutoFitConfig {
@@ -67,6 +72,8 @@ private:
     AutoModelForCausalLM& model_;
     AutoTrainerConfig config_;
     std::unique_ptr<Adam> optimizer_;
+    int accum_counter_ = 0;
+    float accum_loss_ = 0.0f;
 };
 
 }  // namespace ops

@@ -159,6 +159,18 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         )
     }
 
+    fun setRunnerBatchSize(batchSize: Int) {
+        _uiState.value = _uiState.value.copy(
+            runner = _uiState.value.runner.copy(batchSize = batchSize.coerceIn(1, 32))
+        )
+    }
+
+    fun setRunnerGradientAccumulationSteps(steps: Int) {
+        _uiState.value = _uiState.value.copy(
+            runner = _uiState.value.runner.copy(gradientAccumulationSteps = steps.coerceIn(1, 64))
+        )
+    }
+
     fun setRunnerSteps(steps: Int) {
         _uiState.value = _uiState.value.copy(
             runner = _uiState.value.runner.copy(steps = steps.coerceIn(1, 100))
@@ -206,15 +218,28 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     appendRunnerLog("Model opened: ${model.family}, loadWeights=${state.loadWeights}")
                     mf.initLora(MobileFineTuner.LoraConfig.attentionQkvo())
                     appendRunnerLog("LoRA initialized: q_proj/k_proj/v_proj/o_proj")
-                    mf.createTrainer(MobileFineTuner.TrainerConfig(2e-4f, 0.0f, 1.0f, -100))
-                    appendRunnerLog("Trainer created")
+                    mf.createTrainer(
+                        MobileFineTuner.TrainerConfig(
+                            2e-4f,
+                            0.0f,
+                            1.0f,
+                            -100,
+                            true,
+                            state.gradientAccumulationSteps
+                        )
+                    )
+                    appendRunnerLog(
+                        "Trainer created: batchSize=${state.batchSize}, " +
+                            "seqLength=${state.sequenceLength}, " +
+                            "gradAccum=${state.gradientAccumulationSteps}"
+                    )
 
                     for (step in 1..state.steps) {
                         if (stopRunnerRequested) break
                         updateRunnerMessage("Running step $step/${state.steps}")
                         val t0 = SystemClock.elapsedRealtime()
                         val result = mf.trainTextBatch(
-                            arrayOf(state.trainingText),
+                            Array(state.batchSize) { state.trainingText },
                             state.sequenceLength,
                             true
                         )
@@ -224,6 +249,9 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                             loss = result.loss,
                             trainableTensorCount = result.trainableTensorCount,
                             validLabelCount = result.validLabelCount,
+                            accumulationStep = result.accumulationStep,
+                            gradientAccumulationSteps = result.gradientAccumulationSteps,
+                            optimizerStep = result.optimizerStep,
                             elapsedMs = elapsed
                         )
                         _uiState.value = _uiState.value.copy(
@@ -233,7 +261,9 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                         )
                         appendRunnerLog(
                             "step=$step loss=${String.format(Locale.US, "%.6f", result.loss)} " +
-                                "validLabels=${result.validLabelCount} elapsedMs=$elapsed"
+                                "validLabels=${result.validLabelCount} " +
+                                "accum=${result.accumulationStep}/${result.gradientAccumulationSteps} " +
+                                "optimizerStep=${result.optimizerStep} elapsedMs=$elapsed"
                         )
                     }
                 }

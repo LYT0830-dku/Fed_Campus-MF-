@@ -105,7 +105,14 @@ MobileFineTuner.SelfTestResult smoke = MobileFineTuner.selfTest(context.getFiles
 
 try (MobileFineTuner mf = MobileFineTuner.open(modelDir, true)) {
     mf.initLora(MobileFineTuner.LoraConfig.attentionQkvo());
-    mf.createTrainer(MobileFineTuner.TrainerConfig.defaults());
+    mf.createTrainer(new MobileFineTuner.TrainerConfig(
+            2e-4f,
+            0.0f,
+            1.0f,
+            -100,
+            true,
+            4       // gradientAccumulationSteps
+    ));
 
     MobileFineTuner.TrainStepResult result = mf.trainStep(
             inputIds,
@@ -151,10 +158,13 @@ factory and `CausalLMBatch` builder. The two-argument `trainTextBatch(texts,
 sequenceLength)` keeps `appendEos=false` for backwards compatibility; the
 three-argument overload makes the sample-boundary policy explicit.
 
-`TrainerConfig.defaults()` uses streaming full-token CE by default, so Android
-training does not allocate a dense `[batch, sequence, vocab]` logits tensor.
-Use `new TrainerConfig(lr, wd, maxGradNorm, ignoreIndex, false)` only for dense
-logits debugging.
+`TrainerConfig.defaults()` uses streaming full-token CE and
+`gradientAccumulationSteps=1` by default, so Android training does not allocate
+a dense `[batch, sequence, vocab]` logits tensor. Use
+`new TrainerConfig(lr, wd, maxGradNorm, ignoreIndex, false, gradAccumSteps)`
+only for dense logits debugging. When `gradAccumSteps > 1`, `trainStep` and
+`trainTextBatch` still return the current micro-batch loss, while the returned
+`optimizerStep` flag indicates whether that call performed the Adam update.
 
 ## Device Smoke Test
 

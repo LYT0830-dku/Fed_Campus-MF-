@@ -146,6 +146,24 @@ void test_gpt2_auto_trainer_step() {
     require(std::isfinite(result.loss), "GPT-2 AutoTrainer loss is not finite");
     require(result.trainable_tensor_count > 0, "GPT-2 trainable tensor count missing");
     require(result.valid_label_count == 2, "GPT-2 valid label count mismatch");
+    require(result.optimizer_step, "GPT-2 AutoTrainer default step should update optimizer");
+    require(result.accumulation_step == 1, "GPT-2 default accumulation step mismatch");
+    require(result.gradient_accumulation_steps == 1, "GPT-2 default grad accumulation mismatch");
+
+    ops::AutoTrainerConfig accum_trainer_cfg;
+    accum_trainer_cfg.learning_rate = 1e-3f;
+    accum_trainer_cfg.gradient_accumulation_steps = 2;
+    ops::AutoTrainer accum_trainer(*model, accum_trainer_cfg);
+    const auto accum_first = accum_trainer.train_step(input_ids, attention_mask, label_tensor);
+    require(std::isfinite(accum_first.loss), "GPT-2 accumulated first loss is not finite");
+    require(!accum_first.optimizer_step, "GPT-2 first accumulated step should not update optimizer");
+    require(accum_first.accumulation_step == 1, "GPT-2 first accumulated step counter mismatch");
+    require(accum_first.gradient_accumulation_steps == 2, "GPT-2 accumulation config mismatch");
+    const auto accum_second = accum_trainer.train_step(input_ids, attention_mask, label_tensor);
+    require(std::isfinite(accum_second.loss), "GPT-2 accumulated second loss is not finite");
+    require(accum_second.optimizer_step, "GPT-2 second accumulated step should update optimizer");
+    require(accum_second.accumulation_step == 2, "GPT-2 second accumulated step counter mismatch");
+    require(std::isfinite(accum_second.accumulated_loss), "GPT-2 accumulated average loss is not finite");
 
     ops::CausalLMBatchConfig batch_cfg;
     batch_cfg.sequence_length = 3;

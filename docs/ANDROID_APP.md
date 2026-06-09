@@ -35,7 +35,7 @@ android-visualizer/app/build/outputs/apk/debug/app-debug.apk
    tokenizer files, and optionally SafeTensors weights.
 5. Select the imported local model.
 6. Choose whether to load SafeTensors weights.
-7. Set sequence length and step count.
+7. Set sequence length, batch size, step count, and gradient accumulation.
 8. Start training.
 
 The app copies selected model files into:
@@ -55,6 +55,11 @@ The app calls the Android SDK in this order:
 2. `initLora(MobileFineTuner.LoraConfig.attentionQkvo())`
 3. `createTrainer(...)`
 4. `trainTextBatch(...)`
+
+`batchSize` controls how many text rows are tokenized into each native training
+batch. `gradientAccumulationSteps` controls how many runner steps accumulate
+gradients before the native `AutoTrainer` clips gradients, runs Adam, and clears
+gradients.
 
 The runner is intended to run while the app is visible. The activity keeps the
 screen awake during training so vendor background execution policies are less

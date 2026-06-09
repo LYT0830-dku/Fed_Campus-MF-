@@ -1,6 +1,7 @@
 #include "auto_trainer.h"
 
 #include "../core/lm_loss.h"
+#include "../core/ops.h"
 
 #include <stdexcept>
 #include <vector>
@@ -10,6 +11,9 @@ namespace ops {
 AutoTrainer::AutoTrainer(AutoModelForCausalLM& model,
                          const AutoTrainerConfig& config)
     : model_(model), config_(config) {
+    if (config_.gradient_accumulation_steps <= 0) {
+        throw std::invalid_argument("AutoTrainer requires gradient_accumulation_steps > 0");
+    }
     AdamConfig adam_cfg;
     adam_cfg.learning_rate = config_.learning_rate;
     adam_cfg.weight_decay = config_.weight_decay;
@@ -38,7 +42,27 @@ AutoTrainStepResult AutoTrainer::train_step(const TensorPtr& input_ids,
         auto logits = model_.forward(input_ids, attention_mask);
         loss = lm_cross_entropy(logits, labels, config_.ignore_index, "mean");
     }
-    loss->backward();
+    const float raw_loss = loss->data<float>()[0];
+    TensorPtr backward_loss = loss;
+    if (config_.gradient_accumulation_steps > 1) {
+        backward_loss = mul(loss, 1.0f / static_cast<float>(config_.gradient_accumulation_steps));
+    }
+    backward_loss->backward();
+
+    accum_counter_ += 1;
+    accum_loss_ += raw_loss;
+
+    AutoTrainStepResult result;
+    result.loss = raw_loss;
+    result.trainable_tensor_count = static_cast<int>(params.size());
+    result.valid_label_count = valid_label_count;
+    result.accumulation_step = accum_counter_;
+    result.gradient_accumulation_steps = config_.gradient_accumulation_steps;
+    result.optimizer_step = accum_counter_ >= config_.gradient_accumulation_steps;
+
+    if (!result.optimizer_step) {
+        return result;
+    }
 
     optimizer_->clip_grad_norm(params, config_.max_grad_norm);
 
@@ -50,10 +74,9 @@ AutoTrainStepResult AutoTrainer::train_step(const TensorPtr& input_ids,
     optimizer_->step(params, grads);
     optimizer_->zero_grad(params);
 
-    AutoTrainStepResult result;
-    result.loss = loss->data<float>()[0];
-    result.trainable_tensor_count = static_cast<int>(params.size());
-    result.valid_label_count = valid_label_count;
+    result.accumulated_loss = accum_loss_ / static_cast<float>(config_.gradient_accumulation_steps);
+    accum_counter_ = 0;
+    accum_loss_ = 0.0f;
     return result;
 }
 

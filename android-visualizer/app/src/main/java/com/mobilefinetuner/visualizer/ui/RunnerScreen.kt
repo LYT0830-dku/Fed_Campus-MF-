@@ -96,6 +96,8 @@ fun RunnerScreen(
                 runner = runner,
                 onLoadWeights = viewModel::setRunnerLoadWeights,
                 onSequenceLength = viewModel::setRunnerSequenceLength,
+                onBatchSize = viewModel::setRunnerBatchSize,
+                onGradientAccumulationSteps = viewModel::setRunnerGradientAccumulationSteps,
                 onSteps = viewModel::setRunnerSteps,
                 onTrainingText = viewModel::setRunnerTrainingText,
                 onStart = viewModel::startRunnerTraining,
@@ -258,6 +260,8 @@ private fun RunnerControls(
     runner: RunnerUiState,
     onLoadWeights: (Boolean) -> Unit,
     onSequenceLength: (Int) -> Unit,
+    onBatchSize: (Int) -> Unit,
+    onGradientAccumulationSteps: (Int) -> Unit,
     onSteps: (Int) -> Unit,
     onTrainingText: (String) -> Unit,
     onStart: () -> Unit,
@@ -296,7 +300,10 @@ private fun RunnerControls(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 OutlinedTextField(
                     value = runner.sequenceLength.toString(),
                     onValueChange = { text -> text.toIntOrNull()?.let(onSequenceLength) },
@@ -307,10 +314,34 @@ private fun RunnerControls(
                     singleLine = true
                 )
                 OutlinedTextField(
+                    value = runner.batchSize.toString(),
+                    onValueChange = { text -> text.toIntOrNull()?.let(onBatchSize) },
+                    enabled = !running,
+                    label = { Text("Batch size") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedTextField(
                     value = runner.steps.toString(),
                     onValueChange = { text -> text.toIntOrNull()?.let(onSteps) },
                     enabled = !running,
                     label = { Text("Steps") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = runner.gradientAccumulationSteps.toString(),
+                    onValueChange = { text -> text.toIntOrNull()?.let(onGradientAccumulationSteps) },
+                    enabled = !running,
+                    label = { Text("Grad accum") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f),
                     singleLine = true
@@ -327,7 +358,10 @@ private fun RunnerControls(
                 maxLines = 5
             )
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Button(
                     onClick = onStart,
                     enabled = !running,
@@ -369,17 +403,32 @@ private fun ResultSection(runner: RunnerUiState) {
                 )
             } else {
                 runner.results.takeLast(8).forEach { result ->
-                    Row(
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
-                        Text("Step ${result.step}", fontWeight = FontWeight.Medium)
-                        Text(
-                            "loss=${String.format(Locale.US, "%.5f", result.loss)}",
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text("${result.elapsedMs} ms", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Step ${result.step}", fontWeight = FontWeight.Medium)
+                            Text("${result.elapsedMs} ms", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "loss=${String.format(Locale.US, "%.5f", result.loss)}",
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                if (result.optimizerStep) "Adam" else "Accum ${result.accumulationStep}/${result.gradientAccumulationSteps}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

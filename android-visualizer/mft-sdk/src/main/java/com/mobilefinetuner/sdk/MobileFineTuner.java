@@ -71,7 +71,8 @@ public final class MobileFineTuner implements AutoCloseable {
                 config.weightDecay,
                 config.maxGradNorm,
                 config.ignoreIndex,
-                config.useStreamingLmLoss
+                config.useStreamingLmLoss,
+                config.gradientAccumulationSteps
         );
     }
 
@@ -98,7 +99,15 @@ public final class MobileFineTuner implements AutoCloseable {
                 batchSize,
                 sequenceLength
         );
-        return new TrainStepResult((float) result[0], (int) result[1], (int) result[2]);
+        return new TrainStepResult(
+                (float) result[0],
+                (int) result[1],
+                (int) result[2],
+                (float) result[3],
+                (int) result[4],
+                (int) result[5],
+                result[6] != 0.0
+        );
     }
 
     public TrainStepResult trainTextBatch(String[] texts, int sequenceLength) {
@@ -119,7 +128,15 @@ public final class MobileFineTuner implements AutoCloseable {
             }
         }
         double[] result = nativeTrainTextBatch(requireOpen(), copied, sequenceLength, appendEos);
-        return new TrainStepResult((float) result[0], (int) result[1], (int) result[2]);
+        return new TrainStepResult(
+                (float) result[0],
+                (int) result[1],
+                (int) result[2],
+                (float) result[3],
+                (int) result[4],
+                (int) result[5],
+                result[6] != 0.0
+        );
     }
 
     public int trainableTensorCount() {
@@ -178,7 +195,8 @@ public final class MobileFineTuner implements AutoCloseable {
             float weightDecay,
             float maxGradNorm,
             int ignoreIndex,
-            boolean useStreamingLmLoss
+            boolean useStreamingLmLoss,
+            int gradientAccumulationSteps
     );
     private static native double[] nativeTrainStep(
             long handle,
@@ -240,6 +258,7 @@ public final class MobileFineTuner implements AutoCloseable {
         public final float maxGradNorm;
         public final int ignoreIndex;
         public final boolean useStreamingLmLoss;
+        public final int gradientAccumulationSteps;
 
         public TrainerConfig(float learningRate, float weightDecay, float maxGradNorm, int ignoreIndex) {
             this(learningRate, weightDecay, maxGradNorm, ignoreIndex, true);
@@ -252,6 +271,24 @@ public final class MobileFineTuner implements AutoCloseable {
                 int ignoreIndex,
                 boolean useStreamingLmLoss
         ) {
+            this(
+                    learningRate,
+                    weightDecay,
+                    maxGradNorm,
+                    ignoreIndex,
+                    useStreamingLmLoss,
+                    1
+            );
+        }
+
+        public TrainerConfig(
+                float learningRate,
+                float weightDecay,
+                float maxGradNorm,
+                int ignoreIndex,
+                boolean useStreamingLmLoss,
+                int gradientAccumulationSteps
+        ) {
             if (learningRate <= 0.0f) {
                 throw new IllegalArgumentException("learningRate must be positive");
             }
@@ -261,11 +298,15 @@ public final class MobileFineTuner implements AutoCloseable {
             if (maxGradNorm <= 0.0f) {
                 throw new IllegalArgumentException("maxGradNorm must be positive");
             }
+            if (gradientAccumulationSteps <= 0) {
+                throw new IllegalArgumentException("gradientAccumulationSteps must be positive");
+            }
             this.learningRate = learningRate;
             this.weightDecay = weightDecay;
             this.maxGradNorm = maxGradNorm;
             this.ignoreIndex = ignoreIndex;
             this.useStreamingLmLoss = useStreamingLmLoss;
+            this.gradientAccumulationSteps = gradientAccumulationSteps;
         }
 
         public static TrainerConfig defaults() {
@@ -277,11 +318,27 @@ public final class MobileFineTuner implements AutoCloseable {
         public final float loss;
         public final int trainableTensorCount;
         public final int validLabelCount;
+        public final float accumulatedLoss;
+        public final int accumulationStep;
+        public final int gradientAccumulationSteps;
+        public final boolean optimizerStep;
 
-        private TrainStepResult(float loss, int trainableTensorCount, int validLabelCount) {
+        private TrainStepResult(
+                float loss,
+                int trainableTensorCount,
+                int validLabelCount,
+                float accumulatedLoss,
+                int accumulationStep,
+                int gradientAccumulationSteps,
+                boolean optimizerStep
+        ) {
             this.loss = loss;
             this.trainableTensorCount = trainableTensorCount;
             this.validLabelCount = validLabelCount;
+            this.accumulatedLoss = accumulatedLoss;
+            this.accumulationStep = accumulationStep;
+            this.gradientAccumulationSteps = gradientAccumulationSteps;
+            this.optimizerStep = optimizerStep;
         }
     }
 
