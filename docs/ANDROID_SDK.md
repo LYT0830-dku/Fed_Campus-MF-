@@ -188,6 +188,24 @@ skipped and the synthetic SDK smoke still runs. Add
 `.loadWeights=false` to any argument prefix when you only want to validate graph,
 tokenizer, LoRA, and JNI wiring without loading full SafeTensors weights.
 
+On Android versions with scoped storage, prefer app-private storage for
+instrumentation assets, for example:
+
+```text
+/data/user/0/com.mobilefinetuner.sdk.test/files/models/gpt2
+```
+
+The real-asset smoke supports staged modes through `<prefix>.mode`:
+
+- `open`: validate model config/tokenizer discovery and model construction.
+- `lora`: validate `open` plus LoRA adapter initialization.
+- `trainer`: validate `open`, LoRA initialization, and trainer creation.
+- `trainText`: run a native tokenizer-backed training step.
+
+Large models can exceed vendor background execution limits when run through
+instrumentation. Use `trainer` for heavyweight family readiness checks and keep
+`trainText` for a model/sequence pair that completes within the device limit.
+
 ## Sample App
 
 Build the standalone SDK sample app:

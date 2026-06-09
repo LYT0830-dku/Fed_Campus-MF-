@@ -85,9 +85,24 @@ public final class MobileFineTunerDeviceSmokeTest {
 
         boolean loadWeights = Boolean.parseBoolean(args.getString(key + ".loadWeights", "true"));
         int sequenceLength = Integer.parseInt(args.getString(key + ".sequenceLength", "8"));
+        String mode = args.getString(key + ".mode", "trainText");
         try (MobileFineTuner mf = MobileFineTuner.open(modelDir, loadWeights)) {
+            if ("open".equals(mode)) {
+                return 1;
+            }
             mf.initLora(MobileFineTuner.LoraConfig.attentionQkvo());
+            assertTrue(familyName + " trainable tensor count is empty after LoRA",
+                    mf.trainableTensorCount() > 0);
+            if ("lora".equals(mode)) {
+                return 1;
+            }
             mf.createTrainer(new MobileFineTuner.TrainerConfig(2e-4f, 0.0f, 1.0f, -100));
+            if ("trainer".equals(mode)) {
+                return 1;
+            }
+            if (!"trainText".equals(mode)) {
+                throw new IllegalArgumentException(familyName + " unknown real-asset smoke mode: " + mode);
+            }
             MobileFineTuner.TrainStepResult result =
                     mf.trainTextBatch(new String[]{"MobileFineTuner real asset smoke."}, sequenceLength, true);
             assertTrue(familyName + " loss is not finite", Float.isFinite(result.loss));
