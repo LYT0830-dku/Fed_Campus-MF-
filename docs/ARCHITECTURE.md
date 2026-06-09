@@ -11,10 +11,12 @@ HuggingFace-style model_dir
         |
         v
 ModelRegistry      -> model family, asset paths, default LoRA targets
+ModelFamilyAdapter -> family-specific load layout and LoRA target policy
 TokenizerFactory   -> model-specific tokenizer through one interface
+make_causal_lm_batch -> text/token rows to input_ids, attention_mask, labels
 AutoModelForCausalLM -> concrete graph dispatch + SafeTensors loading + LoRA
 AutoTrainer       -> shared one-step causal-LM LoRA training core
-Graph class        -> GPT-2 / Gemma / Qwen forward and backward math
+Graph class        -> GPT-2 / Gemma / Qwen / Llama forward and backward math
 SafeTensorsLoader  -> external checkpoint tensors into graph weights
 LoRA modules       -> trainable adapters on named target projections
 Optimizer          -> native C++ parameter update
@@ -46,12 +48,24 @@ auto spec = ops::ModelRegistry::inspect_pretrained(model_dir);
 
 `ModelRegistry` reads `config.json` and returns:
 
-- `family`: `GPT2`, `Gemma`, or `Qwen`;
+- `family`: `GPT2`, `Gemma`, `Qwen`, experimental `Llama`, or recognized-only
+  `Mistral`;
 - `model_type`: the raw HuggingFace `model_type`;
 - tokenizer and SafeTensors asset paths;
 - single-file vs sharded SafeTensors availability;
 - default LoRA target names for that family;
 - `tie_word_embeddings` behavior.
+
+`ModelFamilyAdapter` owns the policy that should not be duplicated in app code
+or scattered through `AutoModelForCausalLM`:
+
+- family-specific SafeTensors transpose defaults;
+- GPT-2 PEFT/fused `c_attn` versus explicit split q/k/v LoRA policy;
+- Gemma LoRA target spec construction;
+- Qwen/Llama qv-only request detection.
+
+New families should add policy here before wiring model construction into
+`AutoModelForCausalLM`.
 
 Load a tokenizer:
 
@@ -62,9 +76,30 @@ auto encoded = tokenizer->encode_with_attention(prompt, 128);
 
 `TokenizerFactory` is intentionally an `AutoTokenizer`-style dispatcher. It
 standardizes the C++ call site but does not collapse different tokenizers into
-one algorithm. GPT-2 byte-level BPE, Qwen byte-level BPE, and Gemma tokenizer
-logic remain separate because their vocabularies, special tokens, and
-pre-tokenization rules differ.
+one algorithm. GPT-2 byte-level BPE, Qwen byte-level BPE, Gemma tokenizer logic,
+and the Llama 3.x ByteLevel-BPE adapter remain separate because their
+vocabularies, special tokens, and pre-tokenization rules differ. Mistral
+tokenizer loading is deliberately blocked until a dedicated adapter passes
+HuggingFace golden alignment.
+
+Build a standard full-token causal-LM batch:
+
+```cpp
+ops::CausalLMBatchConfig batch_cfg;
+batch_cfg.sequence_length = 128;
+auto batch = ops::make_causal_lm_batch(
+    *tokenizer,
+    {"first training sentence", "second training sentence"},
+    batch_cfg);
+```
+
+`CausalLMBatch` owns `input_ids`, `attention_mask`, and shifted `labels`
+tensors. It follows the same objective as HuggingFace/PyTorch causal LM
+training: logits at position `s` predict the token in `labels[s + 1]`, while
+padding labels are `-100`. For left-padded batches, MF also masks the first real
+token after padding so a padding-position query is not supervised to predict a
+real token. `scripts/generate_lm_alignment_fixture.py` uses the same label
+policy before asking PyTorch for the reference loss.
 
 ## Model Graph Layer
 
@@ -73,6 +108,7 @@ Each supported architecture has a graph class under `operator/finetune_ops/graph
 ```text
 gpt2_model.{h,cpp}
 gemma_model.{h,cpp}
+llama_model.{h,cpp}
 qwen_model.{h,cpp}
 ```
 
@@ -92,10 +128,14 @@ where architecture-specific behavior lives. Generic application code should use
 drop to concrete graph classes when it needs model-specific diagnostics or
 alignment hooks.
 
-`AutoModelForCausalLM` uses `ModelRegistry` to construct GPT-2, Gemma, or Qwen,
-load SafeTensors with family-correct layout defaults, initialize LoRA, run
-forward, and expose trainable parameters. `AutoTrainer` sits one layer above it
-and implements the shared one-step training core:
+`AutoModelForCausalLM` uses `ModelRegistry` to construct GPT-2, Gemma, Qwen, or
+experimental Llama graphs, load SafeTensors with family-correct layout defaults,
+initialize LoRA, run forward, and expose trainable parameters. Mistral is
+recognized but rejected at this layer until graph gates pass. It also retains a
+structured `SafeTensorsLoadReport` for the most recent weight load, including
+loaded keys, missing keys, source shard paths, dtype/shape metadata, and
+unmapped checkpoint tensors. `AutoTrainer` sits one layer above it and
+implements the shared one-step training core:
 
 ```text
 input_ids + attention_mask + labels
@@ -105,6 +145,12 @@ AutoModelForCausalLM::forward
         |
         v
 lm_cross_entropy -> backward -> grad clip -> Adam -> zero_grad
+```
+
+Application code can pass either raw tensors or `CausalLMBatch` directly:
+
+```cpp
+auto result = trainer.train_step(batch);
 ```
 
 ## Tokenizer Extension Contract
@@ -142,6 +188,50 @@ The golden fixture path is intentionally external to the source package because
 it contains local model paths. The generated token ID sequences are small, but
 they are tied to the exact tokenizer snapshot used to generate them.
 
+Llama tokenizer support is schema-limited by design. The current adapter covers
+Llama 3.x fast `tokenizer.json` assets using ByteLevel BPE and rejects
+SentencePiece-only, Unigram, Metaspace-only, and GPT2-tokenizer Llama-family
+variants until each receives its own HuggingFace golden gate.
+
+Mistral is the next target family, but it is not allowed to borrow the Llama
+adapter by assumption. Its tokenizer gate must first prove exact HuggingFace ID,
+mask, and decode alignment on a real Mistral snapshot.
+
+Real-weight model alignment is validated separately from tokenizer alignment.
+Generate a fixture with PyTorch/Transformers:
+
+```bash
+python3 scripts/generate_lm_alignment_fixture.py \
+  --model-dir /path/to/hf-model-snapshot \
+  --output runs/model_alignment/model_alignment_fixture.json
+MFT_LM_ALIGNMENT_FIXTURE=runs/model_alignment/model_alignment_fixture.json \
+  ctest --test-dir operator/build --output-on-failure -R AutoModelAlignment
+```
+
+or use:
+
+```bash
+bash scripts/check_lm_alignment_fixture.sh \
+  runs/model_alignment/model_alignment_fixture.json
+```
+
+`AutoModelAlignment` compares the C++ tokenizer output, shifted causal-LM loss,
+and last-token logits top-k against the fixture. Without the environment
+variable it skips, so routine tests do not require large local weights.
+
+For padded batch fixtures, pass multiple `--prompt` values and a fixed
+`--max-length`; the generated fixture stores flattened row-major tensors plus
+`batch_size` and `sequence_length`:
+
+```bash
+python3 scripts/generate_lm_alignment_fixture.py \
+  --model-dir /path/to/Llama-3.2-1B-Instruct \
+  --prompt "MobileFineTuner Llama alignment prompt." \
+  --prompt "Short." \
+  --max-length 12 \
+  --output runs/model_alignment/llama_padded_batch_alignment_fixture.json
+```
+
 ## Model Extension Contract
 
 When adding a model family:
@@ -150,18 +240,24 @@ When adding a model family:
 2. Add a graph class under `finetune_ops/graph`.
 3. Map SafeTensors keys explicitly in `assign_weight`.
 4. Define default LoRA targets using upstream module names.
-5. Register the family in `ModelRegistry`.
-6. Add small synthetic tests first, then real-asset smoke tests outside the
+5. Add load-layout and LoRA target policy in `ModelFamilyAdapter`.
+6. Register the family in `ModelRegistry`.
+7. Fail explicitly in `TokenizerFactory` and `AutoModelForCausalLM` until the
+   tokenizer and graph gates pass.
+8. Add small synthetic tests first, then real-asset smoke tests outside the
    source package.
 
 This mirrors the discovery part of the PyTorch/Transformers pattern:
+
+For the full family-by-family expansion plan and acceptance gates, see
+`docs/MODEL_LAYER_ROADMAP.md`.
 
 ```text
 AutoConfig      -> ModelRegistry
 AutoTokenizer   -> TokenizerFactory
 AutoModel class  -> AutoModelForCausalLM
 Trainer core     -> AutoTrainer
-PEFT targets    -> default_lora_targets + graph LoRA injection
+PEFT targets    -> ModelFamilyAdapter + graph LoRA injection
 ```
 
 ## Why This Is Cleaner Than Per-Directory Hardcoding

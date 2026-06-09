@@ -31,7 +31,7 @@ echo "[Train] out_dir=$OUT_DIR"
 # Use local C++ binary built in this directory
 LOCAL_BIN="$SCRIPT_DIR/build/train"
 if [ ! -x "$LOCAL_BIN" ]; then
-  echo "[Build] 構建本地二進位..."
+  echo "[Build] Building local binary..."
   "$SCRIPT_DIR/build.sh"
 fi
 

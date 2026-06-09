@@ -22,7 +22,7 @@
 #include "finetune_ops/graph/qwen_model.h"
 #include "finetune_ops/graph/lora_saver.h"
 
-// 获取当前进程RSS（MB）
+// Read the current process RSS in MB.
 static double get_rss_mb() {
 #ifdef __APPLE__
     struct mach_task_basic_info info;
@@ -177,7 +177,7 @@ int main(int argc, char** argv) {
     Args args;
     parse_args(argc, argv, args);
     
-    // 设置默认日志文件
+    // Set a default log file when none is provided.
     if (args.log_file.empty()) {
         auto now = std::chrono::system_clock::now();
         auto time = std::chrono::system_clock::to_time_t(now);
@@ -186,7 +186,7 @@ int main(int argc, char** argv) {
         args.log_file = ss.str();
     }
     
-    // 创建输出目录
+    // Create output directories.
     std::filesystem::create_directories(args.output_dir);
     std::filesystem::create_directories("logs");
     
@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
         auto lora_params = model.get_lora_parameters();
         log << "  Total LoRA parameters: " << lora_params.size() << "\n";
         
-        // 计算LoRA参数量
+        // Count LoRA parameters.
         int64_t total_params = 0;
         for (const auto& p : lora_params) {
             total_params += p->numel();

@@ -119,17 +119,42 @@ try (MobileFineTuner mf = MobileFineTuner.open(modelDir, true)) {
 }
 ```
 
+For the standard causal-LM path, Android callers can let the native tokenizer
+and batch builder create `inputIds`, `attentionMask`, and shifted labels:
+
+```java
+try (MobileFineTuner mf = MobileFineTuner.open(modelDir, true)) {
+    mf.initLora(MobileFineTuner.LoraConfig.attentionQkvo());
+    mf.createTrainer(MobileFineTuner.TrainerConfig.defaults());
+
+    MobileFineTuner.TrainStepResult result = mf.trainTextBatch(
+            new String[]{"A training sentence.", "Another sentence."},
+            64,
+            true  // appendEos: supervise independent sample boundaries
+    );
+}
+```
+
 Call order:
 
 1. `MobileFineTuner.open(modelDir, loadWeights)`
 2. `initLora(...)`
 3. `createTrainer(...)`
-4. `trainStep(...)`
+4. `trainStep(...)` or `trainTextBatch(...)`
 5. `close()`
 
 `inputIds`, `attentionMask`, and `labels` are flattened row-major arrays with
 length `batchSize * sequenceLength`. Labels use the same shifted causal-LM
 contract as the C++ `AutoTrainer`: ignored positions should be `-100`.
+`trainTextBatch` applies that contract internally through the C++ tokenizer
+factory and `CausalLMBatch` builder. The two-argument `trainTextBatch(texts,
+sequenceLength)` keeps `appendEos=false` for backwards compatibility; the
+three-argument overload makes the sample-boundary policy explicit.
+
+`TrainerConfig.defaults()` uses streaming full-token CE by default, so Android
+training does not allocate a dense `[batch, sequence, vocab]` logits tensor.
+Use `new TrainerConfig(lr, wd, maxGradNorm, ignoreIndex, false)` only for dense
+logits debugging.
 
 ## Device Smoke Test
 
@@ -196,8 +221,9 @@ core.
 ## Current Limitations
 
 - `arm64-v8a` only.
-- Java API currently exposes the install self-test and one-step LoRA training
-  core, not a full dataset loop or checkpoint manager.
+- Java API currently exposes the install self-test, one-step tensor LoRA
+  training, and one-step text-batch LoRA training, not a full dataset loop or
+  checkpoint manager.
 - Model files are loaded from normal filesystem paths; the SDK does not load
   directly from compressed APK assets.
 - Full-weight phone training still depends on device memory limits and the

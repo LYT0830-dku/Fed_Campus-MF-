@@ -17,6 +17,23 @@
 
 namespace ops {
 
+void SafeTensorsLoadReport::clear() {
+    requested_count = 0;
+    loaded.clear();
+    missing.clear();
+    unmapped_hf_keys.clear();
+}
+
+std::string SafeTensorsLoadReport::summary() const {
+    std::ostringstream oss;
+    oss << "SafeTensorsLoadReport(requested=" << requested_count
+        << ", loaded=" << loaded.size()
+        << ", missing=" << missing.size()
+        << ", unmapped=" << unmapped_hf_keys.size()
+        << ")";
+    return oss.str();
+}
+
 // ============================================================================
 // SafeTensorsReader implementation
 // ============================================================================
@@ -281,12 +298,32 @@ std::unordered_map<std::string, TensorPtr>
 SafeTensorsReader::load_tensors_mapped(
     const std::unordered_map<std::string, std::string>& key_mapping,
     const SafeTensorsLoadOptions& options) {
-    
+    return load_tensors_mapped(key_mapping, options, nullptr);
+}
+
+std::unordered_map<std::string, TensorPtr>
+SafeTensorsReader::load_tensors_mapped(
+    const std::unordered_map<std::string, std::string>& key_mapping,
+    const SafeTensorsLoadOptions& options,
+    SafeTensorsLoadReport* report) {
     std::unordered_map<std::string, TensorPtr> result;
+    std::set<std::string> requested_hf_keys;
+
+    if (report) {
+        report->requested_count += key_mapping.size();
+    }
     
     for (const auto& [internal_key, hf_key] : key_mapping) {
+        requested_hf_keys.insert(hf_key);
         auto it = tensor_map_.find(hf_key);
         if (it == tensor_map_.end()) {
+            if (report) {
+                report->missing.push_back({internal_key, hf_key});
+            }
+            if (options.strict_key_check) {
+                throw std::runtime_error("Required HF key not found in SafeTensors file: " + hf_key +
+                                         " (internal key: " + internal_key + ")");
+            }
             if (options.verbose) {
                 std::cerr << "[WARN] HF key not found: " << hf_key << std::endl;
             }
@@ -317,6 +354,18 @@ SafeTensorsReader::load_tensors_mapped(
 
         auto tensor = read_tensor_data(it->second, transpose, preserve_low_precision);
         result[internal_key] = tensor;
+        if (report) {
+            SafeTensorsLoadedTensor loaded;
+            loaded.internal_key = internal_key;
+            loaded.hf_key = hf_key;
+            loaded.file_path = filepath_;
+            loaded.hf_dtype = it->second.dtype;
+            loaded.hf_shape = it->second.shape;
+            loaded.loaded_shape = tensor->shape();
+            loaded.transposed = transpose;
+            loaded.preserve_low_precision = preserve_low_precision;
+            report->loaded.push_back(std::move(loaded));
+        }
         
         if (options.verbose) {
             std::cout << "[Loaded] " << internal_key << " <- " << hf_key 
@@ -329,6 +378,15 @@ SafeTensorsReader::load_tensors_mapped(
             if (transpose) std::cout << " (transposed)";
             std::cout << std::endl;
         }
+    }
+
+    if (report) {
+        for (const auto& [hf_key, _] : tensor_map_) {
+            if (requested_hf_keys.find(hf_key) == requested_hf_keys.end()) {
+                report->unmapped_hf_keys.push_back(hf_key);
+            }
+        }
+        std::sort(report->unmapped_hf_keys.begin(), report->unmapped_hf_keys.end());
     }
     
     return result;
@@ -435,14 +493,32 @@ std::unordered_map<std::string, TensorPtr>
 SafeTensorsModelReader::load_tensors_mapped(
     const std::unordered_map<std::string, std::string>& key_mapping,
     const SafeTensorsLoadOptions& options) {
+    return load_tensors_mapped(key_mapping, options, nullptr);
+}
+
+std::unordered_map<std::string, TensorPtr>
+SafeTensorsModelReader::load_tensors_mapped(
+    const std::unordered_map<std::string, std::string>& key_mapping,
+    const SafeTensorsLoadOptions& options,
+    SafeTensorsLoadReport* report) {
     if (readers_.empty()) {
         throw std::logic_error("SafeTensorsModelReader::parse_headers must be called before loading tensors");
     }
 
     std::vector<std::unordered_map<std::string, std::string>> grouped(readers_.size());
+    std::set<std::string> requested_hf_keys;
     for (const auto& [internal_key, hf_key] : key_mapping) {
+        requested_hf_keys.insert(hf_key);
         auto it = tensor_to_reader_.find(hf_key);
         if (it == tensor_to_reader_.end()) {
+            if (report) {
+                report->requested_count += 1;
+                report->missing.push_back({internal_key, hf_key});
+            }
+            if (options.strict_key_check) {
+                throw std::runtime_error("Required HF key not found in SafeTensors model: " + hf_key +
+                                         " (internal key: " + internal_key + ")");
+            }
             if (options.verbose) {
                 std::cerr << "[WARN] HF key not found in SafeTensors model: " << hf_key << std::endl;
             }
@@ -456,8 +532,30 @@ SafeTensorsModelReader::load_tensors_mapped(
         if (grouped[i].empty()) {
             continue;
         }
-        auto partial = readers_[i]->load_tensors_mapped(grouped[i], options);
-        result.insert(partial.begin(), partial.end());
+        if (report) {
+            SafeTensorsLoadReport shard_report;
+            auto partial = readers_[i]->load_tensors_mapped(grouped[i], options, &shard_report);
+            report->requested_count += shard_report.requested_count;
+            report->loaded.insert(report->loaded.end(),
+                                  shard_report.loaded.begin(),
+                                  shard_report.loaded.end());
+            report->missing.insert(report->missing.end(),
+                                   shard_report.missing.begin(),
+                                   shard_report.missing.end());
+            result.insert(partial.begin(), partial.end());
+        } else {
+            auto partial = readers_[i]->load_tensors_mapped(grouped[i], options, nullptr);
+            result.insert(partial.begin(), partial.end());
+        }
+    }
+
+    if (report) {
+        for (const auto& [hf_key, _] : tensor_to_reader_) {
+            if (requested_hf_keys.find(hf_key) == requested_hf_keys.end()) {
+                report->unmapped_hf_keys.push_back(hf_key);
+            }
+        }
+        std::sort(report->unmapped_hf_keys.begin(), report->unmapped_hf_keys.end());
     }
     return result;
 }
@@ -582,6 +680,39 @@ QwenKeyMapper::generate_qwen_mapping(int num_layers) {
         m[in + "mlp.gate_proj.weight"]    = hf + "mlp.gate_proj.weight";
         m[in + "mlp.up_proj.weight"]      = hf + "mlp.up_proj.weight";
         m[in + "mlp.down_proj.weight"]    = hf + "mlp.down_proj.weight";
+    }
+    return m;
+}
+
+std::unordered_map<std::string, std::string>
+LlamaKeyMapper::generate_llama_mapping(int num_layers,
+                                       bool tie_word_embeddings,
+                                       bool attention_bias) {
+    std::unordered_map<std::string, std::string> m;
+    m["embed_tokens.weight"] = "model.embed_tokens.weight";
+    m["final_norm.weight"] = "model.norm.weight";
+    if (!tie_word_embeddings) {
+        m["lm_head.weight"] = "lm_head.weight";
+    }
+
+    for (int i = 0; i < num_layers; ++i) {
+        std::string hf = "model.layers." + std::to_string(i) + ".";
+        std::string in = "layers." + std::to_string(i) + ".";
+        m[in + "input_norm.weight"] = hf + "input_layernorm.weight";
+        m[in + "post_norm.weight"] = hf + "post_attention_layernorm.weight";
+        m[in + "self_attn.q_proj.weight"] = hf + "self_attn.q_proj.weight";
+        m[in + "self_attn.k_proj.weight"] = hf + "self_attn.k_proj.weight";
+        m[in + "self_attn.v_proj.weight"] = hf + "self_attn.v_proj.weight";
+        m[in + "self_attn.o_proj.weight"] = hf + "self_attn.o_proj.weight";
+        if (attention_bias) {
+            m[in + "self_attn.q_proj.bias"] = hf + "self_attn.q_proj.bias";
+            m[in + "self_attn.k_proj.bias"] = hf + "self_attn.k_proj.bias";
+            m[in + "self_attn.v_proj.bias"] = hf + "self_attn.v_proj.bias";
+            m[in + "self_attn.o_proj.bias"] = hf + "self_attn.o_proj.bias";
+        }
+        m[in + "mlp.gate_proj.weight"] = hf + "mlp.gate_proj.weight";
+        m[in + "mlp.up_proj.weight"] = hf + "mlp.up_proj.weight";
+        m[in + "mlp.down_proj.weight"] = hf + "mlp.down_proj.weight";
     }
     return m;
 }

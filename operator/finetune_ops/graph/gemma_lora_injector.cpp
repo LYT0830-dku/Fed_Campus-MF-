@@ -149,7 +149,11 @@ void GemmaLoraInjector::inject(GemmaModel& model, const GemmaLoraSpec& spec) {
 
             auto [A, B] = create_lora_params(in_dim, out_dim, spec.rank);
             ref.linear->attach_lora(A, B, scale, 0, out_dim);
-            ref.linear->set_debug_name("layers_" + std::to_string(layer) + "_self_attn_" + module);
+            const bool attention_module =
+                module == "q_proj" || module == "k_proj" ||
+                module == "v_proj" || module == "o_proj";
+            const std::string group = attention_module ? "self_attn" : "mlp";
+            ref.linear->set_debug_name("layers." + std::to_string(layer) + "." + group + "." + module);
             attached_modules_++;
         }
     }
@@ -348,7 +352,12 @@ void GemmaLoraInjector::load_lora_safetensors(const std::string& path) {
 
         int out_cols = static_cast<int>(weight_shape[1]);
         ref.linear->attach_lora(slice.A, slice.B, scale, 0, out_cols);
-        ref.linear->set_debug_name("layers_" + std::to_string(slice.layer) + "_" + module_name);
+        const bool attention_module =
+            module_name == "q_proj" || module_name == "k_proj" ||
+            module_name == "v_proj" || module_name == "o_proj";
+        const std::string group = attention_module ? "self_attn" : "mlp";
+        ref.linear->set_debug_name(
+            "layers." + std::to_string(slice.layer) + "." + group + "." + module_name);
         attached_modules_++;
 
         if (std::find(loaded_modules.begin(), loaded_modules.end(), module_name) == loaded_modules.end()) {

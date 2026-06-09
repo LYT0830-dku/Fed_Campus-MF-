@@ -61,6 +61,12 @@ ops::ModelFamily family_from_model_type(const std::string& model_type) {
     if (normalized.find("gemma") != std::string::npos) {
         return ops::ModelFamily::Gemma;
     }
+    if (normalized.find("llama") != std::string::npos) {
+        return ops::ModelFamily::Llama;
+    }
+    if (normalized.find("mistral") != std::string::npos) {
+        return ops::ModelFamily::Mistral;
+    }
     if (normalized.find("gpt2") != std::string::npos ||
         normalized.find("gpt_2") != std::string::npos ||
         normalized == "gpt") {
@@ -72,6 +78,9 @@ ops::ModelFamily family_from_model_type(const std::string& model_type) {
 std::vector<std::string> default_lora_targets(ops::ModelFamily family) {
     switch (family) {
         case ops::ModelFamily::Qwen:
+            return {"q_proj", "k_proj", "v_proj", "o_proj"};
+        case ops::ModelFamily::Llama:
+        case ops::ModelFamily::Mistral:
             return {"q_proj", "k_proj", "v_proj", "o_proj"};
         case ops::ModelFamily::Gemma:
             return {"q_proj", "k_proj", "v_proj", "o_proj",
@@ -92,6 +101,8 @@ std::string to_string(ModelFamily family) {
     switch (family) {
         case ModelFamily::GPT2: return "gpt2";
         case ModelFamily::Gemma: return "gemma";
+        case ModelFamily::Llama: return "llama";
+        case ModelFamily::Mistral: return "mistral";
         case ModelFamily::Qwen: return "qwen";
         case ModelFamily::Unknown: return "unknown";
     }
@@ -122,7 +133,7 @@ ModelArchitectureSpec ModelRegistry::inspect_pretrained(const std::string& model
     spec.tie_word_embeddings = extract_json_bool(
         config,
         "tie_word_embeddings",
-        family == ModelFamily::GPT2);
+        family == ModelFamily::GPT2 || family == ModelFamily::Qwen);
     spec.default_lora_targets = default_lora_targets(family);
 
     auto& assets = spec.assets;

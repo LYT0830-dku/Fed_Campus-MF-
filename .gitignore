@@ -27,6 +27,8 @@ cmake_install.cmake
 
 # Model weights and data (too large for GitHub)
 data/
+!operator/finetune_ops/data/
+!operator/finetune_ops/data/**
 gemma-3-270m/
 gemma-3-1b/
 **/pretrained/

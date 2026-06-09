@@ -1,26 +1,44 @@
-以下脚本封装了从数据准备到开始 LoRA 微调与评测的最小可运行流程（基于 Gemma 3 1B PT 权重）。
+This example provides a minimal runnable workflow for Gemma 3 1B-PT LoRA
+fine-tuning and MMLU evaluation.
 
-要求：
-- C++17、CMake，以及可用的本机或 Android NDK 编译环境
-- Python 仅用于离线数据准备脚本；原生 LoRA 训练不依赖 PyTorch/Transformers/PEFT
-- 数据集路径通过 `MFT_DATA_ROOT`、`MMLU_DATA_DIR`、`WT2_DATA_DIR` 或仓库本地 `data/` fallback 提供
-- 预训练权重通过 `MFT_MODEL_ROOT`、`GEMMA_1B_MODEL_DIR` 或当前目录 `pretrained/` fallback 提供
+## Requirements
 
-使用顺序：
-1) 生成 JSONL（masked 标签，仅答案位置参与损失）
+- C++17, CMake, and a native or Android NDK build environment.
+- Python is used only for offline data preparation. Native LoRA training does
+  not require PyTorch, Transformers, or PEFT at runtime.
+- Dataset paths are resolved from `MFT_DATA_ROOT`, `MMLU_DATA_DIR`,
+  `WT2_DATA_DIR`, or the repository-local `data/` fallback.
+- Pretrained weights are resolved from `MFT_MODEL_ROOT`,
+  `GEMMA_1B_PT_MODEL_DIR`, or the local `pretrained/` fallback.
+
+## Workflow
+
+1. Prepare JSONL training data with masked labels:
+
+   ```bash
    bash run_prepare_data.sh
-   输出目录：仓库根目录 `runs/mmlu_jsonl_gemma1b_s128/`
+   ```
 
-2) 启动微调（LoRA）
+   Output: `runs/mmlu_jsonl_gemma1b_s128/` under the repository root.
+
+2. Run LoRA fine-tuning:
+
+   ```bash
    bash run_train.sh
-   产物：当前目录 `outputs/`
+   ```
 
-3) 评测（MMLU MCQ）
-   # DEV 验证
+   Output: `outputs/`.
+
+3. Run MMLU multiple-choice evaluation:
+
+   ```bash
    bash run_eval.sh
-   # TEST（可选 few-shot，默认 5-shot）
    FEWSHOT=5 SPLIT=test bash run_eval.sh
+   ```
 
-可调参数：
-- 在 run_train.sh 中通过环境变量覆盖：TRAIN_MODE（`mmlu`/`wt2`）、MMLU_JSONL、WT2_DATA_DIR、STEPS、BATCH_SIZE、SEQ_LEN、LR、RANK、ALPHA、EPOCHS、LOG_EVERY、GRAD_ACCUM
-- 在 run_eval.sh 中通过环境变量覆盖：SPLIT、FEWSHOT
+## Common Overrides
+
+- `run_train.sh`: `TRAIN_MODE`, `MMLU_JSONL`, `WT2_DATA_DIR`, `STEPS`,
+  `BATCH_SIZE`, `SEQ_LEN`, `LR`, `RANK`, `ALPHA`, `EPOCHS`, `LOG_EVERY`,
+  `GRAD_ACCUM`.
+- `run_eval.sh`: `SPLIT`, `FEWSHOT`.

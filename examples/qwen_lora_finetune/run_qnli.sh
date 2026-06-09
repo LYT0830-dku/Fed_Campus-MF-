@@ -49,7 +49,7 @@ if [ "${REBUILD:-0}" = "1" ] || [ ! -x "$BIN" ]; then
 fi
 
 if [ ! -d "$MODEL_DIR" ]; then
-  echo "找不到模型目录：$MODEL_DIR" >&2
+  echo "Model directory not found: $MODEL_DIR" >&2
   exit 1
 fi
 

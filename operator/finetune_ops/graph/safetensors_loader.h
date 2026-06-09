@@ -36,11 +36,38 @@ struct SafeTensorsLoadOptions {
     bool transpose_linear = true;   // auto-transpose Linear weights [out,in]→[in,out]
     bool auto_promote_fp16 = true;  // auto-promote FP16 to FP32
     bool verbose = true;            // print load logs
+    bool strict_key_check = true;   // fail when a mapped HF key is missing
     bool strict_shape_check = true; // strict shape validation
     // Preserve original F16/BF16 storage for matching internal or HF keys even
     // when auto_promote_fp16 is true. Used for frozen base weights where
     // trainable grads and optimizer state remain FP32.
     std::vector<std::string> preserve_low_precision_key_substrings;
+};
+
+struct SafeTensorsLoadedTensor {
+    std::string internal_key;
+    std::string hf_key;
+    std::string file_path;
+    std::string hf_dtype;
+    std::vector<int64_t> hf_shape;
+    std::vector<int64_t> loaded_shape;
+    bool transposed = false;
+    bool preserve_low_precision = false;
+};
+
+struct SafeTensorsMissingKey {
+    std::string internal_key;
+    std::string hf_key;
+};
+
+struct SafeTensorsLoadReport {
+    size_t requested_count = 0;
+    std::vector<SafeTensorsLoadedTensor> loaded;
+    std::vector<SafeTensorsMissingKey> missing;
+    std::vector<std::string> unmapped_hf_keys;
+
+    void clear();
+    std::string summary() const;
 };
 
 /**
@@ -84,6 +111,11 @@ public:
     load_tensors_mapped(const std::unordered_map<std::string, std::string>& key_mapping,
                         const SafeTensorsLoadOptions& options = SafeTensorsLoadOptions());
 
+    std::unordered_map<std::string, TensorPtr>
+    load_tensors_mapped(const std::unordered_map<std::string, std::string>& key_mapping,
+                        const SafeTensorsLoadOptions& options,
+                        SafeTensorsLoadReport* report);
+
 private:
     std::string filepath_;
     std::ifstream file_;
@@ -110,6 +142,11 @@ public:
     std::unordered_map<std::string, TensorPtr>
     load_tensors_mapped(const std::unordered_map<std::string, std::string>& key_mapping,
                         const SafeTensorsLoadOptions& options = SafeTensorsLoadOptions());
+
+    std::unordered_map<std::string, TensorPtr>
+    load_tensors_mapped(const std::unordered_map<std::string, std::string>& key_mapping,
+                        const SafeTensorsLoadOptions& options,
+                        SafeTensorsLoadReport* report);
 
     const std::vector<std::string>& files() const { return files_; }
 
@@ -164,6 +201,23 @@ public:
      */
     static std::unordered_map<std::string, std::string>
     generate_qwen_mapping(int num_layers = 24);
+};
+
+/**
+ * @brief Llama HuggingFace → internal key mapping generator.
+ */
+class LlamaKeyMapper {
+public:
+    /**
+     * @param num_layers number of decoder layers
+     * @param tie_word_embeddings skip lm_head.weight when tied
+     * @param attention_bias include q/k/v/o bias mappings only for configs that
+     *                       explicitly declare attention_bias=true
+     */
+    static std::unordered_map<std::string, std::string>
+    generate_llama_mapping(int num_layers = 32,
+                           bool tie_word_embeddings = false,
+                           bool attention_bias = false);
 };
 
 }  // namespace ops

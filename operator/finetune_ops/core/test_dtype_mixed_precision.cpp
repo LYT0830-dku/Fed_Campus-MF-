@@ -291,12 +291,59 @@ void test_sharded_safetensors_model_reader() {
     SafeTensorsLoadOptions opts;
     opts.verbose = false;
     opts.transpose_linear = false;
-    auto tensors = reader.load_tensors_mapped({{"a", "a.weight"}, {"b", "b.weight"}}, opts);
+    SafeTensorsLoadReport report;
+    auto tensors = reader.load_tensors_mapped({{"a", "a.weight"}, {"b", "b.weight"}}, opts, &report);
 
     require_close(tensors.at("a")->data<float>()[0], 1.0f, 1e-6f, "sharded tensor a[0]");
     require_close(tensors.at("a")->data<float>()[1], 2.0f, 1e-6f, "sharded tensor a[1]");
     require_close(tensors.at("b")->data<float>()[0], 3.0f, 1e-6f, "sharded tensor b[0]");
     require_close(tensors.at("b")->data<float>()[1], 4.0f, 1e-6f, "sharded tensor b[1]");
+    if (report.requested_count != 2 || report.loaded.size() != 2 || !report.missing.empty()) {
+        throw std::runtime_error("SafeTensors load report counts mismatch: " + report.summary());
+    }
+    bool saw_a_file = false;
+    bool saw_b_file = false;
+    for (const auto& item : report.loaded) {
+        if (item.internal_key == "a" && item.hf_key == "a.weight" &&
+            item.file_path.find("model-00001-of-00002.safetensors") != std::string::npos &&
+            item.hf_shape == std::vector<int64_t>({2}) &&
+            item.loaded_shape == std::vector<int64_t>({2})) {
+            saw_a_file = true;
+        }
+        if (item.internal_key == "b" && item.hf_key == "b.weight" &&
+            item.file_path.find("model-00002-of-00002.safetensors") != std::string::npos) {
+            saw_b_file = true;
+        }
+    }
+    if (!saw_a_file || !saw_b_file) {
+        throw std::runtime_error("SafeTensors load report did not preserve shard provenance");
+    }
+
+    bool strict_threw = false;
+    try {
+        (void)reader.load_tensors_mapped({{"missing", "missing.weight"}}, opts);
+    } catch (const std::runtime_error& e) {
+        strict_threw = std::string(e.what()).find("Required HF key not found") != std::string::npos;
+    }
+    if (!strict_threw) {
+        throw std::runtime_error("strict SafeTensors missing-key check did not throw");
+    }
+
+    opts.strict_key_check = false;
+    SafeTensorsLoadReport missing_report;
+    auto optional = reader.load_tensors_mapped({{"missing", "missing.weight"}}, opts, &missing_report);
+    if (!optional.empty()) {
+        throw std::runtime_error("non-strict SafeTensors missing-key load should return no tensors");
+    }
+    if (missing_report.requested_count != 1 || missing_report.loaded.size() != 0 ||
+        missing_report.missing.size() != 1 ||
+        missing_report.missing[0].internal_key != "missing" ||
+        missing_report.missing[0].hf_key != "missing.weight") {
+        throw std::runtime_error("SafeTensors missing-key report mismatch: " + missing_report.summary());
+    }
+    if (missing_report.unmapped_hf_keys != std::vector<std::string>({"a.weight", "b.weight"})) {
+        throw std::runtime_error("SafeTensors unmapped key report mismatch");
+    }
 }
 
 } // namespace

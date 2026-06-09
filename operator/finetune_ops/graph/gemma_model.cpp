@@ -15,6 +15,35 @@
 
 namespace {
 
+std::string shape_to_string(const std::vector<int64_t>& shape) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < shape.size(); ++i) {
+        if (i > 0) {
+            oss << ",";
+        }
+        oss << shape[i];
+    }
+    oss << "]";
+    return oss.str();
+}
+
+void assign_checked(ops::TensorPtr& slot,
+                    const std::string& key,
+                    const ops::TensorPtr& tensor,
+                    bool strict_shape_check) {
+    if (!tensor) {
+        throw std::runtime_error("GemmaModel::assign_weight received null tensor for " + key);
+    }
+    if (strict_shape_check && slot && slot->shape() != tensor->shape()) {
+        throw std::runtime_error(
+            "GemmaModel::assign_weight shape mismatch for " + key +
+            ": expected=" + shape_to_string(slot->shape()) +
+            ", actual=" + shape_to_string(tensor->shape()));
+    }
+    slot = tensor;
+}
+
 std::string read_file(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) {
@@ -576,8 +605,8 @@ TensorPtr GemmaModel::forward_block(const TensorPtr& input,
     return hidden_states;
 }
 
-TensorPtr GemmaModel::forward(const TensorPtr& input_ids,
-                              const TensorPtr& attention_mask) {
+TensorPtr GemmaModel::forward_hidden(const TensorPtr& input_ids,
+                                     const TensorPtr& attention_mask) {
     auto hidden_states = embedding_lookup(input_ids);
     if (debug_.enabled) {
         dump_tensor(hidden_states, "hidden_states_emb");
@@ -638,16 +667,31 @@ TensorPtr GemmaModel::forward(const TensorPtr& input_ids,
     }
 
     hidden_states = rms_norm(hidden_states, norm_weight_, config_.rms_norm_eps);
-    auto logits = matmul(hidden_states, lm_head_weight_);
+    return hidden_states;
+}
+
+TensorPtr GemmaModel::lm_head(const TensorPtr& hidden) {
+    return matmul(hidden, lm_head_weight_);
+}
+
+TensorPtr GemmaModel::lm_head_weight_for_loss() const {
+    return transpose(lm_head_weight_, 0, 1);
+}
+
+TensorPtr GemmaModel::forward(const TensorPtr& input_ids,
+                              const TensorPtr& attention_mask) {
+    auto logits = lm_head(forward_hidden(input_ids, attention_mask));
     if (debug_.enabled) {
         dump_tensor(logits, "logits");
     }
     return logits;
 }
 
-void GemmaModel::assign_weight(const std::string& key, const TensorPtr& tensor) {
+void GemmaModel::assign_weight(const std::string& key,
+                               const TensorPtr& tensor,
+                               bool strict_shape_check) {
     if (key == "embed_tokens.weight") {
-        embed_weight_ = tensor;
+        assign_checked(embed_weight_, key, tensor, strict_shape_check);
         if (!lm_head_initialized_) {
             lm_head_weight_ = transpose(tensor, 0, 1);
             lm_head_initialized_ = true;
@@ -655,11 +699,11 @@ void GemmaModel::assign_weight(const std::string& key, const TensorPtr& tensor) 
         return;
     }
     if (key == "norm.weight") {
-        norm_weight_ = tensor;
+        assign_checked(norm_weight_, key, tensor, strict_shape_check);
         return;
     }
     if (key == "lm_head.weight") {
-        lm_head_weight_ = tensor;
+        assign_checked(lm_head_weight_, key, tensor, strict_shape_check);
         lm_head_initialized_ = true;
         return;
     }
@@ -677,19 +721,19 @@ void GemmaModel::assign_weight(const std::string& key, const TensorPtr& tensor) 
     std::string name = match[2].str();
     auto& block = blocks_[layer];
 
-    if (name == "input_layernorm.weight") block.input_layernorm_weight = tensor;
-    else if (name == "post_attention_layernorm.weight") block.post_attention_layernorm_weight = tensor;
-    else if (name == "pre_feedforward_layernorm.weight") block.pre_feedforward_layernorm_weight = tensor;
-    else if (name == "post_feedforward_layernorm.weight") block.post_feedforward_layernorm_weight = tensor;
-    else if (name == "self_attn.q_proj.weight") block.q_proj_weight = tensor;
-    else if (name == "self_attn.k_proj.weight") block.k_proj_weight = tensor;
-    else if (name == "self_attn.v_proj.weight") block.v_proj_weight = tensor;
-    else if (name == "self_attn.o_proj.weight") block.o_proj_weight = tensor;
-    else if (name == "self_attn.q_norm.weight") block.q_norm_weight = tensor;
-    else if (name == "self_attn.k_norm.weight") block.k_norm_weight = tensor;
-    else if (name == "mlp.gate_proj.weight") block.gate_proj_weight = tensor;
-    else if (name == "mlp.up_proj.weight") block.up_proj_weight = tensor;
-    else if (name == "mlp.down_proj.weight") block.down_proj_weight = tensor;
+    if (name == "input_layernorm.weight") assign_checked(block.input_layernorm_weight, key, tensor, strict_shape_check);
+    else if (name == "post_attention_layernorm.weight") assign_checked(block.post_attention_layernorm_weight, key, tensor, strict_shape_check);
+    else if (name == "pre_feedforward_layernorm.weight") assign_checked(block.pre_feedforward_layernorm_weight, key, tensor, strict_shape_check);
+    else if (name == "post_feedforward_layernorm.weight") assign_checked(block.post_feedforward_layernorm_weight, key, tensor, strict_shape_check);
+    else if (name == "self_attn.q_proj.weight") assign_checked(block.q_proj_weight, key, tensor, strict_shape_check);
+    else if (name == "self_attn.k_proj.weight") assign_checked(block.k_proj_weight, key, tensor, strict_shape_check);
+    else if (name == "self_attn.v_proj.weight") assign_checked(block.v_proj_weight, key, tensor, strict_shape_check);
+    else if (name == "self_attn.o_proj.weight") assign_checked(block.o_proj_weight, key, tensor, strict_shape_check);
+    else if (name == "self_attn.q_norm.weight") assign_checked(block.q_norm_weight, key, tensor, strict_shape_check);
+    else if (name == "self_attn.k_norm.weight") assign_checked(block.k_norm_weight, key, tensor, strict_shape_check);
+    else if (name == "mlp.gate_proj.weight") assign_checked(block.gate_proj_weight, key, tensor, strict_shape_check);
+    else if (name == "mlp.up_proj.weight") assign_checked(block.up_proj_weight, key, tensor, strict_shape_check);
+    else if (name == "mlp.down_proj.weight") assign_checked(block.down_proj_weight, key, tensor, strict_shape_check);
     else
         throw std::runtime_error("Unknown Gemma block weight: " + name);
 }
@@ -811,6 +855,25 @@ std::vector<TensorPtr> GemmaModel::get_lora_parameters() const {
         auto collect = [&](const std::unique_ptr<LoRALinear>& linear) {
             if (!linear) return;
             auto slices = linear->trainable_parameters();
+            params.insert(params.end(), slices.begin(), slices.end());
+        };
+        collect(block.q_proj_lora);
+        collect(block.k_proj_lora);
+        collect(block.v_proj_lora);
+        collect(block.o_proj_lora);
+        collect(block.gate_proj_lora);
+        collect(block.up_proj_lora);
+        collect(block.down_proj_lora);
+    }
+    return params;
+}
+
+std::vector<std::pair<std::string, TensorPtr>> GemmaModel::named_lora_parameters() const {
+    std::vector<std::pair<std::string, TensorPtr>> params;
+    for (const auto& block : blocks_) {
+        auto collect = [&](const std::unique_ptr<LoRALinear>& linear) {
+            if (!linear || linear->slices().empty()) return;
+            auto slices = linear->debug_params();
             params.insert(params.end(), slices.begin(), slices.end());
         };
         collect(block.q_proj_lora);

@@ -26,10 +26,10 @@ if [ "${REBUILD:-0}" = "1" ] || [ ! -x "$BIN" ]; then
 fi
 
 if [ ! -d "$MODEL_DIR" ]; then
-  echo "找不到模型目錄：$MODEL_DIR"; exit 1
+  echo "Model directory not found: $MODEL_DIR"; exit 1
 fi
 if [ ! -d "$DATA_DIR" ]; then
-  echo "找不到 MMLU 數據：$DATA_DIR"; exit 1
+  echo "MMLU data directory not found: $DATA_DIR"; exit 1
 fi
 
 mkdir -p "$OUT_DIR" "$LOG_DIR"

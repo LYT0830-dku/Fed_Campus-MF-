@@ -14,12 +14,14 @@
 #include "finetune_ops/core/tokenizer.h"
 
 #include "finetune_ops/data/mmlu_dataset.h"
+#include "finetune_ops/data/causal_lm_batch.h"
 #include "finetune_ops/data/wikitext2_dataset.h"
 
 #include "finetune_ops/graph/auto_model.h"
 #include "finetune_ops/graph/gemma_lora_injector.h"
 #include "finetune_ops/graph/gemma_model.h"
 #include "finetune_ops/graph/gpt2_model.h"
+#include "finetune_ops/graph/llama_model.h"
 #include "finetune_ops/graph/lora_injector.h"
 #include "finetune_ops/graph/lora_saver.h"
 #include "finetune_ops/graph/model_registry.h"

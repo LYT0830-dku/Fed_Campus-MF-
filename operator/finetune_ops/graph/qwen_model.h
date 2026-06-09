@@ -75,10 +75,13 @@ public:
     void init_lora(int rank = 8, float alpha = 16.0f, float dropout = 0.05f,
                    bool qv_only = false, uint64_t seed = 42);
     std::vector<TensorPtr> get_lora_parameters() const;
+    std::vector<std::pair<std::string, TensorPtr>> named_lora_parameters() const;
     std::vector<TensorPtr> parameters() const;
     void freeze_base();
 
-    void assign_weight(const std::string& key, const TensorPtr& tensor);
+    void assign_weight(const std::string& key,
+                       const TensorPtr& tensor,
+                       bool strict_shape_check = true);
     const QwenConfig& config() const { return config_; }
 
 private:

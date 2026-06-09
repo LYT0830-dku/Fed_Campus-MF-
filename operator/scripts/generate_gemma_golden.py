@@ -232,7 +232,7 @@ def main():
         nargs="*",
         default=[
             "Hello, Gemma!\n",
-            "今天天气不错🙂",
+            "\u4eca\u5929\u5929\u6c14\u4e0d\u9519\U0001f642",
         ],
     )
     args = parser.parse_args()

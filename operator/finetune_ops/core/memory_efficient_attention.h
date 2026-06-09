@@ -7,7 +7,7 @@
  * - Use online/streaming softmax; blockwise; reduce space from O(S²) to O(S)
  * - Two passes: compute row-wise max/sumExp, then normalize and accumulate context
  * 
- * 参考：
+ * References:
  * - FlashAttention (Dao et al., 2022)
  * - Online normalizer for softmax
  * - PyTorch SDPA memory-efficient kernel
@@ -77,4 +77,3 @@ void online_softmax_weighted_sum(
 );
 
 } // namespace ops
-

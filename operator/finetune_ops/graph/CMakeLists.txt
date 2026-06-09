@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 
-# 测试可执行文件（前向对齐 + LoRA 正确性）
+# Test executables for forward alignment and LoRA correctness.
 add_executable(test_gpt2_forward test_gpt2_forward.cpp)
 target_link_libraries(test_gpt2_forward operators)
 

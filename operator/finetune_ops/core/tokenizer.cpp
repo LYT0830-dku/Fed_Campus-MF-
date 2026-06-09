@@ -51,15 +51,31 @@ bool path_exists(const fs::path& path) {
 
 namespace ops {
 
+std::vector<int> Tokenizer::encode_with_options(const std::string& text,
+                                                const TokenizerEncodeOptions& options) {
+    std::vector<int> ids = encode(text);
+    if (options.truncation &&
+        options.max_length > 0 &&
+        static_cast<int>(ids.size()) > options.max_length) {
+        ids.resize(options.max_length);
+    }
+    return ids;
+}
+
+std::string Tokenizer::decode_with_options(const std::vector<int>& tokens,
+                                           const TokenizerDecodeOptions&) {
+    return decode(tokens);
+}
+
 EncodedInput Tokenizer::encode_with_attention(const std::string& text,
                                               int max_length,
                                               bool truncation) {
     EncodedInput result;
-    result.input_ids = encode(text);
-
-    if (truncation && max_length > 0 && static_cast<int>(result.input_ids.size()) > max_length) {
-        result.input_ids.resize(max_length);
-    }
+    TokenizerEncodeOptions options;
+    options.add_special_tokens = default_add_special_tokens();
+    options.max_length = max_length;
+    options.truncation = truncation;
+    result.input_ids = encode_with_options(text, options);
 
     result.attention_mask.assign(result.input_ids.size(), 1);
 
@@ -72,9 +88,19 @@ EncodedInput Tokenizer::encode_with_attention(const std::string& text,
             pad = 0;
         }
         const size_t old_size = result.input_ids.size();
-        result.input_ids.resize(max_length, pad);
-        result.attention_mask.resize(max_length, 0);
-        std::fill(result.attention_mask.begin(), result.attention_mask.begin() + old_size, 1);
+        const size_t pad_count = static_cast<size_t>(max_length) - old_size;
+        if (default_left_padding()) {
+            std::vector<int> padded(static_cast<size_t>(max_length), pad);
+            std::vector<int> mask(static_cast<size_t>(max_length), 0);
+            std::copy(result.input_ids.begin(), result.input_ids.end(), padded.begin() + pad_count);
+            std::fill(mask.begin() + pad_count, mask.end(), 1);
+            result.input_ids = std::move(padded);
+            result.attention_mask = std::move(mask);
+        } else {
+            result.input_ids.resize(max_length, pad);
+            result.attention_mask.resize(max_length, 0);
+            std::fill(result.attention_mask.begin(), result.attention_mask.begin() + old_size, 1);
+        }
     }
 
     return result;
@@ -360,8 +386,22 @@ public:
         return tokenizer_.encode(text);
     }
 
+    std::vector<int> encode_with_options(const std::string& text,
+                                         const TokenizerEncodeOptions& options) override {
+        return tokenizer_.encode(
+            text,
+            options.add_special_tokens,
+            options.max_length,
+            options.truncation);
+    }
+
     std::string decode(const std::vector<int>& tokens) override {
         return tokenizer_.decode(tokens);
+    }
+
+    std::string decode_with_options(const std::vector<int>& tokens,
+                                    const TokenizerDecodeOptions& options) override {
+        return tokenizer_.decode(tokens, options.skip_special_tokens);
     }
 
     int get_vocab_size() const override { return tokenizer_.get_vocab_size(); }
@@ -385,8 +425,22 @@ public:
         return tokenizer_.encode(text);
     }
 
+    std::vector<int> encode_with_options(const std::string& text,
+                                         const TokenizerEncodeOptions& options) override {
+        return tokenizer_.encode(
+            text,
+            options.add_special_tokens,
+            options.max_length,
+            options.truncation);
+    }
+
     std::string decode(const std::vector<int>& tokens) override {
         return tokenizer_.decode(tokens);
+    }
+
+    std::string decode_with_options(const std::vector<int>& tokens,
+                                    const TokenizerDecodeOptions& options) override {
+        return tokenizer_.decode(tokens, options.skip_special_tokens);
     }
 
     int get_vocab_size() const override { return tokenizer_.get_vocab_size(); }
@@ -397,6 +451,47 @@ public:
 
 private:
     QwenBPETokenizer tokenizer_;
+};
+
+class LlamaBPEAdapter final : public Tokenizer {
+public:
+    explicit LlamaBPEAdapter(const LlamaTokenizerConfig& config)
+        : tokenizer_(config) {
+        tokenizer_.load();
+    }
+
+    std::vector<int> encode(const std::string& text) override {
+        return tokenizer_.encode(text);
+    }
+
+    std::vector<int> encode_with_options(const std::string& text,
+                                         const TokenizerEncodeOptions& options) override {
+        return tokenizer_.encode(
+            text,
+            options.add_special_tokens,
+            options.max_length,
+            options.truncation);
+    }
+
+    std::string decode(const std::vector<int>& tokens) override {
+        return tokenizer_.decode(tokens);
+    }
+
+    std::string decode_with_options(const std::vector<int>& tokens,
+                                    const TokenizerDecodeOptions& options) override {
+        return tokenizer_.decode(tokens, options.skip_special_tokens);
+    }
+
+    int get_vocab_size() const override { return tokenizer_.get_vocab_size(); }
+    int get_eos_token() const override { return tokenizer_.get_eos_token_id(); }
+    int get_bos_token() const override { return tokenizer_.get_bos_token_id(); }
+    int get_pad_token() const override { return tokenizer_.get_pad_token_id(); }
+    int get_unk_token() const override { return tokenizer_.get_unk_token_id(); }
+    bool default_add_special_tokens() const override { return true; }
+    bool default_left_padding() const override { return tokenizer_.left_padding(); }
+
+private:
+    LlamaBPETokenizer tokenizer_;
 };
 
 class GemmaTokenizerAdapter final : public Tokenizer {
@@ -410,8 +505,22 @@ public:
         return tokenizer_.encode(text);
     }
 
+    std::vector<int> encode_with_options(const std::string& text,
+                                         const TokenizerEncodeOptions& options) override {
+        return tokenizer_.encode(
+            text,
+            options.add_special_tokens,
+            options.max_length,
+            options.truncation);
+    }
+
     std::string decode(const std::vector<int>& tokens) override {
         return tokenizer_.decode(tokens);
+    }
+
+    std::string decode_with_options(const std::vector<int>& tokens,
+                                    const TokenizerDecodeOptions& options) override {
+        return tokenizer_.decode(tokens, options.skip_special_tokens);
     }
 
     int get_vocab_size() const override { return tokenizer_.get_vocab_size(); }
@@ -419,6 +528,8 @@ public:
     int get_bos_token() const override { return tokenizer_.get_bos_token_id(); }
     int get_pad_token() const override { return tokenizer_.get_pad_token_id(); }
     int get_unk_token() const override { return tokenizer_.get_unk_token_id(); }
+    bool default_add_special_tokens() const override { return true; }
+    bool default_left_padding() const override { return true; }
 
 private:
     GemmaTokenizer tokenizer_;
@@ -438,6 +549,12 @@ std::string TokenizerFactory::infer_model_type(const std::string& model_dir) {
         }
         if (model_type.find("gemma") != std::string::npos) {
             return "gemma";
+        }
+        if (model_type.find("llama") != std::string::npos) {
+            return "llama";
+        }
+        if (model_type.find("mistral") != std::string::npos) {
+            return "mistral";
         }
         if (model_type.find("gpt2") != std::string::npos ||
             model_type.find("gpt_2") != std::string::npos ||
@@ -478,6 +595,18 @@ std::unique_ptr<Tokenizer> TokenizerFactory::from_pretrained(
     if (model_type.find("gemma") != std::string::npos) {
         return std::make_unique<GemmaTokenizerAdapter>(
             GemmaTokenizerConfig::from_pretrained(model_dir));
+    }
+
+    if (model_type.find("llama") != std::string::npos) {
+        return std::make_unique<LlamaBPEAdapter>(
+            LlamaTokenizerConfig::from_pretrained(model_dir));
+    }
+
+    if (model_type.find("mistral") != std::string::npos) {
+        throw std::runtime_error(
+            "Mistral tokenizer assets are recognized but not supported yet. "
+            "Do not reuse the Llama tokenizer adapter until a Mistral HF golden "
+            "alignment gate passes.");
     }
 
     if (model_type.find("gpt2") != std::string::npos ||

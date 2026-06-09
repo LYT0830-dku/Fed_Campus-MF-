@@ -80,7 +80,7 @@ void MMLURunner::read_mmlu_csv(const std::string& path, std::vector<MCQItem>& ou
     int idx_answer = find_col("answer");
 
     if (idx_question < 0 || idx_a < 0 || idx_b < 0 || idx_c < 0 || idx_d < 0 || idx_answer < 0) {
-        // 简易容错
+        // Basic tolerance for malformed rows.
     }
 
     std::string line;
@@ -253,5 +253,4 @@ MMLUResult MMLURunner::evaluate(GPT2Model& model, GPT2BPETokenizer& tok, int few
 }
 
 } // namespace ops
-
 

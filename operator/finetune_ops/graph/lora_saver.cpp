@@ -103,17 +103,17 @@ bool key_target_to_enum(const std::string& key, LoraTarget& out) {
 } // namespace
 
 bool LoRAState::compatible_with(const GPT2Model& model) const {
-    // 简单校验：层数、隐藏维
-    (void)model; // 避免未使用警告
+    // Basic sanity check for layer and hidden-dimension compatibility.
+    (void)model; // Avoid unused-parameter warnings until full validation is added.
     // Assume at least one tensor for layer 0 exists
     for (const auto& kv : tensors) {
         if (kv.first.find("layer.0") != std::string::npos) {
-            // 检查维度是否合理
+            // Check whether the tensor shape is plausible.
             auto shape = kv.second->shape();
             if (shape.empty()) continue;
             // rank should be within [1,128]
             if (rank < 1 || rank > 128) return false;
-            // 简单通过
+            // Accept this lightweight compatibility check.
             return true;
         }
     }
@@ -132,7 +132,7 @@ bool LoraSaver::parse_peft_key(const std::string& key, int& layer, std::string& 
     size_t lora_pos = key.find(".lora_");
     if (layer_pos == std::string::npos || lora_pos == std::string::npos) return false;
     
-    // 提取层号
+    // Extract layer index.
     size_t layer_start = layer_pos + 6; // after "layer."
     size_t layer_end = key.find('.', layer_start);
     if (layer_end == std::string::npos || layer_end >= lora_pos) return false;
@@ -144,7 +144,7 @@ bool LoraSaver::parse_peft_key(const std::string& key, int& layer, std::string& 
     // Extract target (between layer index and lora token)
     target = key.substr(layer_end + 1, lora_pos - layer_end - 1);
     
-    // 提取A/B
+    // Extract A/B suffix.
     std::string lora_suffix = key.substr(lora_pos + 6); // after ".lora_"
     if (lora_suffix == "A") ab = "A";
     else if (lora_suffix == "B") ab = "B";
@@ -218,7 +218,7 @@ void LoraSaver::save_safetensors(const std::string& path,
     std::ofstream out(path, std::ios::binary);
     if (!out) throw std::runtime_error("Cannot open " + path);
     
-    // 排序键名以保证顺序一致
+    // Sort keys to keep serialization deterministic.
     std::vector<std::string> sorted_keys;
     sorted_keys.reserve(state.size());
     for (const auto& kv : state) sorted_keys.push_back(kv.first);
@@ -250,7 +250,7 @@ void LoraSaver::save_safetensors(const std::string& path,
         offset += nbytes;
     }
     
-    // 元数据
+    // Metadata.
     header_json << ",\"__metadata__\":{";
     header_json << "\"rank\":\"" << spec.rank << "\",";
     header_json << "\"alpha\":\"" << spec.alpha << "\",";
@@ -267,7 +267,7 @@ void LoraSaver::save_safetensors(const std::string& path,
     // Write header
     out.write(header_str.c_str(), header_len);
     
-    // 写数据（按排序后的顺序）
+    // Write tensor data in sorted-key order.
     for (const auto& name : sorted_keys) {
         const auto& t = state.at(name);
         const float* data = t->data<float>();
@@ -408,7 +408,7 @@ void LoraSaver::attach_from_state(GPT2Model& model, const LoRAState& state) {
     int effective_rank = state.rank > 0 ? state.rank : 1;
     float scale = state.alpha / static_cast<float>(effective_rank);
 
-    // 先清空现有的 LoRA 切片，避免重复附加
+    // Clear existing LoRA slices first to avoid duplicate attachments.
     for (int i = 0; i < cfg.n_layer; ++i) {
         auto& blk = model.get_block(i);
         if (blk.qkv_lin) blk.qkv_lin->clear_lora();

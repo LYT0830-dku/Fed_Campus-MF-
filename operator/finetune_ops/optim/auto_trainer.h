@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/tensor.h"
+#include "../data/causal_lm_batch.h"
 #include "../graph/auto_model.h"
 #include "adam.h"
 
@@ -13,11 +14,13 @@ struct AutoTrainerConfig {
     float weight_decay = 0.0f;
     float max_grad_norm = 1.0f;
     int ignore_index = -100;
+    bool use_streaming_lm_loss = true;
 };
 
 struct AutoTrainStepResult {
     float loss = 0.0f;
     int trainable_tensor_count = 0;
+    int valid_label_count = 0;
 };
 
 class AutoTrainer {
@@ -28,6 +31,8 @@ public:
     AutoTrainStepResult train_step(const TensorPtr& input_ids,
                                    const TensorPtr& attention_mask,
                                    const TensorPtr& labels);
+
+    AutoTrainStepResult train_step(const CausalLMBatch& batch);
 
 private:
     AutoModelForCausalLM& model_;

@@ -27,7 +27,7 @@
   #endif
 #endif
 
-// 默认使用纯 C++，当启用 USE_BLAS 时走 BLAS 实现
+// Use pure C++ by default; USE_BLAS enables BLAS-backed kernels.
 
 namespace ops {
 
@@ -53,6 +53,48 @@ namespace {
         // Legacy: set grad_fn that calls accumulate_gradient
         // (kept for backward compatibility)
         #endif
+    }
+
+    float rope_inv_frequency(int64_t d,
+                             int64_t head_dim,
+                             float rope_theta,
+                             bool use_llama3_scaling,
+                             float rope_scaling_factor,
+                             float rope_low_freq_factor,
+                             float rope_high_freq_factor,
+                             int rope_original_max_position_embeddings) {
+        float inv_freq =
+            1.0f / std::pow(rope_theta,
+                            2.0f * static_cast<float>(d) / static_cast<float>(head_dim));
+        if (!use_llama3_scaling) {
+            return inv_freq;
+        }
+        if (rope_scaling_factor <= 0.0f ||
+            rope_low_freq_factor <= 0.0f ||
+            rope_high_freq_factor <= 0.0f ||
+            rope_original_max_position_embeddings <= 0 ||
+            rope_high_freq_factor <= rope_low_freq_factor) {
+            throw std::runtime_error("apply_rope: invalid Llama3 rope_scaling parameters");
+        }
+
+        constexpr float two_pi = 6.2831853071795864769f;
+        const float wavelen = two_pi / inv_freq;
+        const float old_context =
+            static_cast<float>(rope_original_max_position_embeddings);
+        const float low_freq_wavelen = old_context / rope_low_freq_factor;
+        const float high_freq_wavelen = old_context / rope_high_freq_factor;
+
+        if (wavelen < high_freq_wavelen) {
+            return inv_freq;
+        }
+        if (wavelen > low_freq_wavelen) {
+            return inv_freq / rope_scaling_factor;
+        }
+
+        const float smooth =
+            (old_context / wavelen - rope_low_freq_factor) /
+            (rope_high_freq_factor - rope_low_freq_factor);
+        return (1.0f - smooth) * inv_freq / rope_scaling_factor + smooth * inv_freq;
     }
 }
 
@@ -299,7 +341,7 @@ namespace {
     template<typename Op>
     TensorPtr elementwise_binary_op(const TensorPtr& a, const TensorPtr& b, Op op) {
         if (!can_broadcast(a, b)) {
-            // 🔧 添加详细错误信息
+            // Add detailed error information.
             std::string msg = "Tensors cannot be broadcasted: shape_a=[";
             for (size_t i = 0; i < a->shape().size(); ++i) {
                 msg += std::to_string(a->shape()[i]);
@@ -2334,7 +2376,15 @@ TensorPtr repeat_kv_heads(const TensorPtr& kv, int repeat_factor) {
     return result;
 }
 
-TensorPtr apply_rope(const TensorPtr& x, int seq_len, int head_dim, float rope_theta) {
+TensorPtr apply_rope(const TensorPtr& x,
+                     int seq_len,
+                     int head_dim,
+                     float rope_theta,
+                     bool use_llama3_scaling,
+                     float rope_scaling_factor,
+                     float rope_low_freq_factor,
+                     float rope_high_freq_factor,
+                     int rope_original_max_position_embeddings) {
     // x shape: [batch, heads, seq_len, head_dim]
     // RoPE (Rotary Position Embedding) implementsation
     
@@ -2366,8 +2416,13 @@ TensorPtr apply_rope(const TensorPtr& x, int seq_len, int head_dim, float rope_t
         for (int64_t h = 0; h < heads; ++h) {
             for (int64_t pos = 0; pos < seq_len; ++pos) {
                 for (int64_t d = 0; d < half_dim; ++d) {
-                    // Calculate frequency
-                    float freq = 1.0f / std::pow(rope_theta, 2.0f * d / head_dim);
+                    const float freq =
+                        rope_inv_frequency(d, head_dim, rope_theta,
+                                           use_llama3_scaling,
+                                           rope_scaling_factor,
+                                           rope_low_freq_factor,
+                                           rope_high_freq_factor,
+                                           rope_original_max_position_embeddings);
                     float angle = pos * freq;
                     float cos_val = std::cos(angle);
                     float sin_val = std::sin(angle);
@@ -2399,7 +2454,10 @@ TensorPtr apply_rope(const TensorPtr& x, int seq_len, int head_dim, float rope_t
     if (x->requires_grad()) {
         result->set_requires_grad(true);
         #ifdef USE_NEW_AUTOGRAD_ENGINE
-        auto backward_fn = std::make_shared<ApplyRoPEBackward>(seq_len, head_dim, rope_theta);
+        auto backward_fn = std::make_shared<ApplyRoPEBackward>(
+            seq_len, head_dim, rope_theta, use_llama3_scaling, rope_scaling_factor,
+            rope_low_freq_factor, rope_high_freq_factor,
+            rope_original_max_position_embeddings);
         register_backward(result, {x}, backward_fn);
         #else
         result->set_grad_fn([x](const TensorPtr& grad_output) -> std::vector<TensorPtr> {
@@ -2563,19 +2621,19 @@ TensorPtr lora_linear(const TensorPtr& input, const TensorPtr& weight,
                 auto grad_output_2d = reshape(grad_output, {batch_seq, out_dim});
                 auto input_2d = reshape(input, {batch_seq, in_dim});
                 
-                // 🔧 DEBUG输出已禁用
+                // Debug output disabled.
                 
                 // grad_lora_hidden = grad_output @ lora_B^T: [B*S, out] @ [out, rank] = [B*S, rank]
                 auto lora_B_t = transpose(lora_B, 0, 1);
                 
-                // 🔧 DEBUG输出已禁用
+                // Debug output disabled.
                 
                 auto grad_lora_hidden = matmul(grad_output_2d, lora_B_t);
                 
                 // grad_lora_A = input^T @ grad_lora_hidden: [in, B*S] @ [B*S, rank] = [in, rank]
                 auto input_2d_t = transpose(input_2d, 0, 1);
                 
-                // 🔧 DEBUG输出已禁用
+                // Debug output disabled.
                 
                 auto grad_lora_A_raw = matmul(input_2d_t, grad_lora_hidden);
                 auto grad_lora_A = mul(grad_lora_A_raw, alpha);
@@ -2869,7 +2927,7 @@ TensorPtr dropout(const TensorPtr& tensor, float p, bool training) {
     float* y = result->data<float>();
     float* m = mask->data<float>();
     float scale = 1.0f / (1.0f - p);
-    // 簡單可重現掩碼：以索引生成偽隨機
+    // Simple reproducible mask generated from the element index.
     for (int64_t i = 0; i < tensor->numel(); ++i) {
         uint32_t seed = static_cast<uint32_t>(i * 1664525u + 1013904223u);
         float r = (seed & 0xFFFFFF) / static_cast<float>(0x1000000);

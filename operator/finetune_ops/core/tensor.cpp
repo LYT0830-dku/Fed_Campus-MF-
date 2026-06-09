@@ -441,7 +441,7 @@ TensorPtr Tensor::slice(int dim, int64_t start, int64_t end, int64_t step) const
         strides[i] = strides[i + 1] * shape_[i + 1];
     }
     
-    // 复制切片数据
+    // Copy slice data.
     int64_t dst_idx = 0;
     std::function<void(int, int64_t)> copy_slice;
     copy_slice = [&](int d, int64_t src_offset) {
@@ -659,7 +659,7 @@ TensorPtr Tensor::operator/(float scalar) const {
 TensorPtr zeros(const std::vector<int64_t>& shape, DType dtype, Device device) {
     auto tensor = std::make_shared<Tensor>(shape, dtype, device);
 
-    // 🔧 FIX: 确保所有类型都清零
+    // Ensure all supported dtypes are zero-initialized.
     if (dtype == kFloat32 || dtype == kFloat16 || dtype == kBFloat16) {
         std::memset(tensor->data_ptr(), 0, tensor->numel() * dtype_size(dtype));
     } else if (dtype == kInt32) {

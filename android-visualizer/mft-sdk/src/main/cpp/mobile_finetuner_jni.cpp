@@ -16,7 +16,9 @@ namespace {
 
 struct NativeSession {
     std::unique_ptr<ops::AutoModelForCausalLM> model;
+    std::unique_ptr<ops::Tokenizer> tokenizer;
     std::unique_ptr<ops::AutoTrainer> trainer;
+    std::string model_dir;
 };
 
 void throw_java(JNIEnv* env, const char* class_name, const std::string& message) {
@@ -68,12 +70,46 @@ std::vector<std::string> to_string_vector(JNIEnv* env, jobjectArray values) {
     return out;
 }
 
+std::vector<std::string> copy_string_array(JNIEnv* env, jobjectArray values, const char* name) {
+    if (values == nullptr) {
+        throw std::invalid_argument(std::string(name) + " must not be null");
+    }
+    const jsize length = env->GetArrayLength(values);
+    if (length <= 0) {
+        throw std::invalid_argument(std::string(name) + " must contain at least one text");
+    }
+    std::vector<std::string> out;
+    out.reserve(static_cast<size_t>(length));
+    for (jsize i = 0; i < length; ++i) {
+        auto item = static_cast<jstring>(env->GetObjectArrayElement(values, i));
+        if (env->ExceptionCheck()) {
+            return {};
+        }
+        if (item == nullptr) {
+            throw std::invalid_argument(std::string(name) + " must not contain null entries");
+        }
+        out.push_back(to_string(env, item));
+        env->DeleteLocalRef(item);
+    }
+    return out;
+}
+
 NativeSession* require_session(JNIEnv* env, jlong handle) {
     if (handle == 0) {
         throw_illegal_state(env, "MobileFineTuner native session is closed");
         return nullptr;
     }
     return reinterpret_cast<NativeSession*>(handle);
+}
+
+ops::Tokenizer& require_tokenizer(NativeSession& session) {
+    if (!session.tokenizer) {
+        if (session.model_dir.empty()) {
+            throw std::runtime_error("Model directory is not available for tokenizer loading");
+        }
+        session.tokenizer = ops::TokenizerFactory::from_pretrained(session.model_dir);
+    }
+    return *session.tokenizer;
 }
 
 template <typename Body, typename Result>
@@ -243,6 +279,7 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeCreate(
         options.verbose = false;
 
         auto session = std::make_unique<NativeSession>();
+        session->model_dir = model_dir_string;
         session->model = ops::AutoModelForCausalLM::from_pretrained(model_dir_string, options);
         return reinterpret_cast<jlong>(session.release());
     }, static_cast<jlong>(0));
@@ -288,7 +325,8 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeCreateTrainer(
         jfloat learning_rate,
         jfloat weight_decay,
         jfloat max_grad_norm,
-        jint ignore_index) {
+        jint ignore_index,
+        jboolean use_streaming_lm_loss) {
     guarded_void(env, [&]() {
         NativeSession* session = require_session(env, handle);
         if (session == nullptr) {
@@ -303,6 +341,7 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeCreateTrainer(
         config.weight_decay = weight_decay;
         config.max_grad_norm = max_grad_norm;
         config.ignore_index = ignore_index;
+        config.use_streaming_lm_loss = use_streaming_lm_loss == JNI_TRUE;
         session->trainer = std::make_unique<ops::AutoTrainer>(*session->model, config);
     });
 }
@@ -357,11 +396,52 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainStep(
         const ops::AutoTrainStepResult result =
             session->trainer->train_step(input_tensor, mask_tensor, label_tensor);
 
-        jdouble values[2] = {
+        jdouble values[3] = {
             static_cast<jdouble>(result.loss),
-            static_cast<jdouble>(result.trainable_tensor_count)
+            static_cast<jdouble>(result.trainable_tensor_count),
+            static_cast<jdouble>(result.valid_label_count)
         };
-        return make_double_array(env, values, 2);
+        return make_double_array(env, values, 3);
+    }, static_cast<jdoubleArray>(nullptr));
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainTextBatch(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jobjectArray texts,
+        jint sequence_length,
+        jboolean append_eos) {
+    return guarded(env, [&]() -> jdoubleArray {
+        NativeSession* session = require_session(env, handle);
+        if (session == nullptr) {
+            return nullptr;
+        }
+        if (!session->trainer) {
+            throw std::runtime_error("Trainer is not initialized; call createTrainer first");
+        }
+        if (sequence_length <= 1) {
+            throw std::invalid_argument("sequenceLength must be > 1");
+        }
+
+        auto rows = copy_string_array(env, texts, "texts");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+
+        ops::CausalLMBatchConfig batch_cfg;
+        batch_cfg.sequence_length = sequence_length;
+        batch_cfg.append_eos = append_eos == JNI_TRUE;
+        auto batch = ops::make_causal_lm_batch(require_tokenizer(*session), rows, batch_cfg);
+        const ops::AutoTrainStepResult result = session->trainer->train_step(batch);
+
+        jdouble values[3] = {
+            static_cast<jdouble>(result.loss),
+            static_cast<jdouble>(result.trainable_tensor_count),
+            static_cast<jdouble>(result.valid_label_count)
+        };
+        return make_double_array(env, values, 3);
     }, static_cast<jdoubleArray>(nullptr));
 }
 

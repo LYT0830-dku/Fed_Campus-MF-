@@ -45,7 +45,7 @@ Unlike simulation-based or desktop-bound approaches, MobileFineTuner is built ar
 ### Key Features
 
 - **Efficiency**: Pure C++ implementation with modular operators, automatic differentiation, and full backpropagation—no Python runtime or external ML frameworks required
-- **Scalability**: Supports multiple mainstream decoder-only LLM architectures (GPT-2, Gemma, Qwen) with reusable graph, tokenizer, dataset, and LoRA components
+- **Scalability**: Supports multiple mainstream decoder-only LLM architectures (GPT-2, Gemma, Qwen, and validated experimental Llama 3.x) with reusable graph, tokenizer, dataset, and LoRA components
 - **Usability**: Simple high-level APIs that abstract away system complexity, enabling rapid prototyping and practical deployment
 - **Privacy-Preserving**: All training data remains on-device, complying with GDPR and user privacy expectations
 - **Resource-Aware**: Keeps model weights, datasets, run logs, adapters, and profiling output outside the source package; runtime scripts resolve assets through explicit environment variables
@@ -114,6 +114,8 @@ Use the stable umbrella header in new applications:
 ```
 
 See [docs/PUBLIC_API.md](docs/PUBLIC_API.md) for the public API boundary.
+For a consumer-focused setup flow, start with
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
 The legacy package name is still available for existing consumers:
 `find_package(Operators REQUIRED)` and `Operators::operators`.
@@ -228,7 +230,11 @@ model->init_lora(ops::AutoLoraConfig::attention_qkvo());
 ops::AutoTrainerConfig trainer_cfg;
 trainer_cfg.learning_rate = 2e-4f;
 ops::AutoTrainer trainer(*model, trainer_cfg);
-auto step = trainer.train_step(input_ids, attention_mask, labels);
+
+ops::CausalLMBatchConfig batch_cfg;
+batch_cfg.sequence_length = 64;
+auto batch = ops::make_causal_lm_batch(*tokenizer, {"Example text."}, batch_cfg);
+auto step = trainer.train_step(batch);
 ```
 
 The lower-level GPT-2, Gemma, and Qwen graph classes remain available for
@@ -370,6 +376,24 @@ Detailed layout and download examples are documented in
 ### Qwen Family (Alibaba)
 - **Qwen2.5-0.5B**: Lightweight decoder-only transformer with rotary embeddings and QKV sharing
 
+### Llama Family
+- **Llama 3.x snapshots**: validated experimental native graph support with
+  strict SafeTensors mapping, tied/untied output head handling, Llama3 RoPE
+  scaling, and q/k/v/o LoRA.
+- **Llama 3.x tokenizer.json assets**: ByteLevel-BPE tokenizer support with
+  HuggingFace golden alignment.
+- **Real-weight alignment gate**: local Llama 3.2-1B-Instruct fixture passed
+  tokenizer ID, shifted causal-LM loss, and last-token logits top-k alignment
+  against PyTorch/Transformers.
+- SentencePiece-only, Unigram, Metaspace-only, GPT2-tokenizer Llama-like
+  variants, and chat-template execution are not claimed by this adapter.
+
+### Mistral Family
+- **Mistral configs**: recognized by `ModelRegistry` with q/k/v/o LoRA defaults.
+- `TokenizerFactory` and `AutoModelForCausalLM` reject Mistral explicitly until
+  Mistral tokenizer, sliding-window/mask, SafeTensors, and PyTorch alignment
+  gates pass.
+
 ### Adding New Models
 
 MobileFineTuner follows the same high-level split used by PyTorch/Transformers:
@@ -380,7 +404,8 @@ MobileFineTuner follows the same high-level split used by PyTorch/Transformers:
 - `TokenizerFactory::from_pretrained(model_dir)` returns the correct
   model-specific tokenizer behind one `ops::Tokenizer` interface.
 - `AutoModelForCausalLM::from_pretrained(model_dir)` constructs the supported
-  GPT-2, Gemma, or Qwen graph and loads SafeTensors with correct layout defaults.
+  GPT-2, Gemma, Qwen, or validated experimental Llama graph and loads SafeTensors with
+  correct layout defaults.
 - `AutoTrainer` provides a shared one-step causal-LM LoRA training core.
 - model graph classes under `finetune_ops/graph/` implement the architecture
   math and HuggingFace weight-name mapping.
@@ -389,7 +414,8 @@ MobileFineTuner follows the same high-level split used by PyTorch/Transformers:
 
 Different models should keep their own tokenizer algorithms. The framework
 standardizes how applications request tokenization; it does not force GPT-2,
-Gemma, and Qwen to share one vocabulary or pre-tokenizer.
+Gemma, Qwen, Llama-family, and future Mistral-family models to share one
+vocabulary or pre-tokenizer.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the extension contract.
 
@@ -435,6 +461,8 @@ Parameter-Efficient Fine-Tuning (PEFT) via Low-Rank Adaptation:
 // LoRA injection targets
 GPT-2:  Attn QKV + Attn Proj
 Gemma:  Q/K/V/O projections + Gate/Up/Down MLP projections
+Qwen:   Q/K/V/O projections
+Llama:  Q/K/V/O projections
 ```
 
 ### SafeTensors I/O
@@ -579,7 +607,7 @@ MobileFineTuner/
 ├── operator/                           # Core C++ framework
 │   ├── finetune_ops/
 │   │   ├── core/                       # Tensor, autograd, memory manager
-│   │   ├── graph/                      # GPT-2, Gemma, Qwen graphs
+│   │   ├── graph/                      # GPT-2, Gemma, Qwen, Llama graphs
 │   │   ├── nn/                         # LoRA layers
 │   │   ├── optim/                      # Optimizers and trainers
 │   │   └── data/                       # WikiText-2, MMLU dataset loaders/tokenizers

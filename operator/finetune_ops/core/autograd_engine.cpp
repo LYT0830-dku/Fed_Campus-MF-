@@ -178,7 +178,8 @@ void Engine::run_backward(const std::vector<TensorPtr>& outputs,
         return;
     }
     
-    // 拓扑序：保证某个节点在其所有消费者之后被处理，累积梯度已完整
+    // Topological order: process each node after all of its consumers so
+    // accumulated gradients are complete.
     auto topo = topological_sort(roots);
     for (auto& node : topo) {
         if (!node || !node->tensor) continue;

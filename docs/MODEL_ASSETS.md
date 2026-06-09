@@ -45,6 +45,16 @@ Use one shared model root:
     tokenizer.json
     vocab.json
     merges.txt
+  llama-family-model/
+    config.json
+    model.safetensors                 # or model.safetensors.index.json + shards
+    tokenizer.json                    # Llama 3.x ByteLevel-BPE tokenizer.json
+    tokenizer_config.json
+    special_tokens_map.json
+  mistral-family-model/
+    config.json
+    model.safetensors                 # recognized by registry only today
+    tokenizer assets                  # not consumed until Mistral tokenizer gate lands
 ```
 
 Then export:
@@ -61,10 +71,32 @@ Every model snapshot must include `config.json` with a supported HuggingFace
 gpt2      -> GPT-2 graph + GPT-2 byte-level BPE tokenizer
 gemma*    -> Gemma graph + Gemma tokenizer
 qwen*     -> Qwen graph + Qwen byte-level BPE tokenizer
+llama*    -> Llama graph + Llama 3.x ByteLevel-BPE tokenizer.json adapter
+mistral*  -> recognized by ModelRegistry only; AutoModel/Tokenizer reject until gates pass
 ```
+
+The current Qwen graph supports tied input/output embeddings
+(`tie_word_embeddings=true`). A Qwen checkpoint that explicitly sets
+`tie_word_embeddings=false` is rejected by `AutoModelForCausalLM` until separate
+`lm_head.weight` loading is implemented.
 
 Do not infer the model family from `tokenizer.json` alone. Different model
 families reuse that filename with incompatible tokenization rules.
+
+Llama-family graph support is present for `AutoModelForCausalLM` and
+SafeTensors loading, including tied and common untied `lm_head.weight`
+checkpoints, q/k/v/o LoRA, and Llama3 RoPE scaling. Tokenizer support is
+intentionally schema-limited: `TokenizerFactory` supports Llama 3.x fast
+tokenizer assets that use ByteLevel BPE in `tokenizer.json` and have passed
+HuggingFace golden alignment. It does not claim support for SentencePiece-only
+`tokenizer.model`, Unigram, Metaspace-only, GPT2-tokenizer Llama-like models, or
+chat-template execution. Unsupported tokenizer schemas fail explicitly instead
+of silently producing different token IDs.
+
+Mistral-family configs are recognized so applications can report a precise
+unsupported-family error. They are not trainable yet in MF: Mistral tokenizer
+assets and graph loading fail explicitly until sliding-window/mask behavior,
+tokenization, SafeTensors mapping, and PyTorch alignment gates pass.
 
 The runner scripts also accept per-model overrides:
 
@@ -74,6 +106,7 @@ export GPT2_MEDIUM_MODEL_DIR=/path/to/gpt2-medium
 export GEMMA_270M_MODEL_DIR=/path/to/gemma-3-270m
 export GEMMA_1B_PT_MODEL_DIR=/path/to/gemma-3-1b-pt
 export QWEN_MODEL_DIR=/path/to/Qwen2.5-0.5B
+export LLAMA_MODEL_DIR=/path/to/llama-family-model
 ```
 
 For backwards-compatible local experiments, each model example also checks its
@@ -106,6 +139,9 @@ huggingface-cli download Qwen/Qwen2.5-0.5B \
   --local-dir-use-symlinks False
 ```
 
+The asset resolver also accepts common local aliases under `MFT_MODEL_ROOT`,
+for example `gpt2-medium_official` for GPT-2 Medium.
+
 For gated models such as Gemma, accept the model license on HuggingFace first and
 authenticate with `huggingface-cli login`.
 
@@ -130,6 +166,20 @@ model.safetensors.index.json
 The loader reads the index, opens the listed shards, and resolves requested
 tensor names across all shard files. If both `model.safetensors` and an index
 are present, the single-file weight takes precedence.
+
+For model onboarding and support tickets, inspect
+`AutoModelForCausalLM::safetensors_load_report()` after `from_pretrained`. The
+report records:
+
+- total requested mapped keys;
+- loaded internal key, HuggingFace key, source shard path, HF dtype, HF shape,
+  loaded shape, and transpose policy;
+- missing keys when strict loading is disabled;
+- checkpoint tensor keys that were present but not consumed by the active
+  family mapping.
+
+This makes missing-key and wrong-family failures reproducible without depending
+on verbose console logs.
 
 ## Dataset Layout
 
@@ -185,17 +235,33 @@ require local tokenizer snapshots and the Python `transformers` package:
 
 ```bash
 export MFT_MODEL_ROOT=/path/to/mft-models
-python3 scripts/generate_tokenizer_hf_golden_fixtures.py \
-  --output runs/tokenizer_golden/hf_tokenizer_golden.jsonl
-
-cmake -S operator -B operator/build -DBUILD_TESTS=ON
-cmake --build operator/build -j4
-MFT_TOKENIZER_GOLDEN_JSONL=runs/tokenizer_golden/hf_tokenizer_golden.jsonl \
-  ctest --test-dir operator/build --output-on-failure -R TokenizerHFGolden
+bash scripts/check_tokenizer_hf_alignment.sh
 ```
+
+To gate a subset while onboarding a new machine, set
+`MFT_TOKENIZER_MODELS="qwen gemma_270m gemma_1b_pt"` before running the script.
 
 If `MFT_TOKENIZER_GOLDEN_JSONL` is not set, the `TokenizerHFGolden` CTest target
 skips cleanly so source-only builds do not depend on external assets.
+
+Real-weight forward/loss/logits alignment is a separate gate:
+
+```bash
+python3 scripts/generate_lm_alignment_fixture.py \
+  --model-dir /path/to/hf-model-snapshot \
+  --output runs/model_alignment/model_alignment_fixture.json
+
+bash scripts/check_lm_alignment_fixture.sh \
+  runs/model_alignment/model_alignment_fixture.json
+```
+
+The fixture contains local asset paths and small expected numeric outputs, so it
+belongs under ignored `runs/` output rather than the source tree.
+
+For left-padded tokenizers, the fixture generator follows MF's standard
+`CausalLMBatch` label policy: padding tokens are ignored, and the first real
+token after padding is also ignored so a padding-position query is not trained
+to predict real text.
 
 ## Runtime Contract
 

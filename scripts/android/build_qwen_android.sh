@@ -10,7 +10,7 @@ NDK_ROOT="$(mf_android_resolve_ndk)"
 TOOLCHAIN="$NDK_ROOT/build/cmake/android.toolchain.cmake"
 
 if [ ! -f "$TOOLCHAIN" ]; then
-  echo "找不到 Android NDK toolchain: $TOOLCHAIN" >&2
+  echo "Android NDK toolchain not found: $TOOLCHAIN" >&2
   exit 1
 fi
 

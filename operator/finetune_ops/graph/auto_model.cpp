@@ -1,99 +1,24 @@
 #include "auto_model.h"
 
 #include "../core/memory_manager.h"
+#include "model_family_adapter.h"
 
 #include <algorithm>
 #include <stdexcept>
-#include <unordered_set>
 #include <utility>
 
 namespace ops {
 
 namespace {
 
-bool contains_module(const std::vector<std::string>& modules, const std::string& name) {
-    return std::find(modules.begin(), modules.end(), name) != modules.end();
-}
-
-LoraSpec make_gpt2_lora_spec(const AutoLoraConfig& cfg) {
-    LoraSpec spec;
-    spec.rank = cfg.rank;
-    spec.alpha = cfg.alpha;
-    spec.dropout = cfg.dropout;
-    spec.split_qkv = true;
-
-    const auto& modules = cfg.target_modules;
-    if (modules.empty()) {
-        spec.targets = {LoraTarget::AttnQKV, LoraTarget::AttnProj};
-        return spec;
-    }
-
-    spec.targets.clear();
-    if (contains_module(modules, "attn_qkv") ||
-        contains_module(modules, "c_attn") ||
-        contains_module(modules, "q_proj") ||
-        contains_module(modules, "k_proj") ||
-        contains_module(modules, "v_proj")) {
-        spec.targets.push_back(LoraTarget::AttnQKV);
-    }
-    if (contains_module(modules, "attn_proj") ||
-        contains_module(modules, "c_proj") ||
-        contains_module(modules, "o_proj")) {
-        spec.targets.push_back(LoraTarget::AttnProj);
-    }
-    if (contains_module(modules, "mlp_fc_in") || contains_module(modules, "c_fc")) {
-        spec.targets.push_back(LoraTarget::MlpFcIn);
-    }
-    if (contains_module(modules, "mlp_fc_out") || contains_module(modules, "mlp_c_proj")) {
-        spec.targets.push_back(LoraTarget::MlpFcOut);
-    }
-    if (spec.targets.empty()) {
-        throw std::runtime_error("AutoModelForCausalLM: no supported GPT-2 LoRA targets requested");
-    }
-    return spec;
-}
-
-GemmaLoraSpec make_gemma_lora_spec(const AutoLoraConfig& cfg) {
-    GemmaLoraSpec spec;
-    spec.rank = cfg.rank;
-    spec.alpha = cfg.alpha;
-    spec.dropout = cfg.dropout;
-    if (!cfg.target_modules.empty()) {
-        spec.target_modules = cfg.target_modules;
-    }
-    return spec;
-}
-
-bool qwen_qv_only(const AutoLoraConfig& cfg) {
-    if (cfg.target_modules.empty()) {
-        return false;
-    }
-    std::unordered_set<std::string> requested(cfg.target_modules.begin(), cfg.target_modules.end());
-    return requested.count("q_proj") > 0 &&
-           requested.count("v_proj") > 0 &&
-           requested.count("k_proj") == 0 &&
-           requested.count("o_proj") == 0;
-}
-
-SafeTensorsLoadOptions family_load_options(ModelFamily family,
-                                           const SafeTensorsLoadOptions& base,
-                                           bool verbose) {
-    SafeTensorsLoadOptions opts = base;
-    opts.verbose = verbose;
-    switch (family) {
-        case ModelFamily::GPT2:
-            // GPT-2 safetensors are already stored in the internal [in, out] layout.
-            opts.transpose_linear = false;
-            break;
-        case ModelFamily::Gemma:
-        case ModelFamily::Qwen:
-            // Gemma/Qwen HF linear weights are [out, in]; MF kernels expect [in, out].
-            opts.transpose_linear = true;
-            break;
-        default:
-            break;
-    }
-    return opts;
+FamilyLoraRequest make_family_lora_request(const AutoLoraConfig& cfg) {
+    FamilyLoraRequest request;
+    request.rank = cfg.rank;
+    request.alpha = cfg.alpha;
+    request.dropout = cfg.dropout;
+    request.seed = cfg.seed;
+    request.target_modules = cfg.target_modules;
+    return request;
 }
 
 }  // namespace
@@ -123,7 +48,21 @@ AutoModelForCausalLM::from_pretrained(const std::string& model_dir,
             model->gemma_ = std::make_unique<GemmaModel>(cfg);
             break;
         }
+        case ModelFamily::Llama: {
+            LlamaConfig cfg = LlamaConfig::from_pretrained(model_dir + "/config.json");
+            model->llama_ = std::make_unique<LlamaModel>(cfg);
+            break;
+        }
+        case ModelFamily::Mistral:
+            throw std::runtime_error(
+                "AutoModelForCausalLM: Mistral is recognized by ModelRegistry, "
+                "but the Mistral graph/tokenizer gates have not passed yet");
         case ModelFamily::Qwen: {
+            if (!model->spec_.tie_word_embeddings) {
+                throw std::runtime_error(
+                    "AutoModelForCausalLM: Qwen checkpoints with tie_word_embeddings=false "
+                    "are not supported yet; provide a tied Qwen checkpoint or add lm_head.weight support");
+            }
             QwenConfig cfg = QwenConfig::from_pretrained(model_dir + "/config.json");
             model->qwen_ = std::make_unique<QwenModel>(cfg);
             break;
@@ -141,32 +80,51 @@ AutoModelForCausalLM::from_pretrained(const std::string& model_dir,
 void AutoModelForCausalLM::load_pretrained_weights(const AutoModelLoadOptions& options) {
     SafeTensorsModelReader reader(model_dir_);
     reader.parse_headers();
+    safetensors_load_report_.clear();
 
     const auto load_opts =
-        family_load_options(spec_.family, options.safetensors_options, options.verbose);
+        load_options_for_family(spec_.family, options.safetensors_options, options.verbose);
 
     switch (spec_.family) {
         case ModelFamily::GPT2: {
             auto mapping = GPT2KeyMapper::generate_gpt2_mapping(gpt2_->config().n_layer);
-            auto tensors = reader.load_tensors_mapped(mapping, load_opts);
+            auto tensors = reader.load_tensors_mapped(mapping, load_opts, &safetensors_load_report_);
             for (const auto& kv : tensors) {
-                gpt2_->assign_weight(kv.first, kv.second);
+                gpt2_->assign_weight(kv.first, kv.second, load_opts.strict_shape_check);
             }
             break;
         }
         case ModelFamily::Gemma: {
             auto mapping = GemmaKeyMapper::generate_gemma_mapping(gemma_->config().num_hidden_layers);
-            auto tensors = reader.load_tensors_mapped(mapping, load_opts);
-            for (const auto& kv : tensors) {
-                gemma_->assign_weight(kv.first, kv.second);
+            const auto tensor_names = reader.get_tensor_names();
+            const bool has_lm_head =
+                std::find(tensor_names.begin(), tensor_names.end(), "lm_head.weight") != tensor_names.end();
+            if (!has_lm_head) {
+                mapping.erase("lm_head.weight");
             }
+            auto tensors = reader.load_tensors_mapped(mapping, load_opts, &safetensors_load_report_);
+            for (const auto& kv : tensors) {
+                gemma_->assign_weight(kv.first, kv.second, load_opts.strict_shape_check);
+            }
+            break;
+        }
+        case ModelFamily::Llama: {
+            auto mapping = LlamaKeyMapper::generate_llama_mapping(
+                llama_->config().num_hidden_layers,
+                llama_->config().tie_word_embeddings,
+                llama_->config().attention_bias);
+            auto tensors = reader.load_tensors_mapped(mapping, load_opts, &safetensors_load_report_);
+            for (const auto& kv : tensors) {
+                llama_->assign_weight(kv.first, kv.second, load_opts.strict_shape_check);
+            }
+            MemoryManager::instance().clear_unused_memory();
             break;
         }
         case ModelFamily::Qwen: {
             auto mapping = QwenKeyMapper::generate_qwen_mapping(qwen_->config().num_hidden_layers);
-            auto tensors = reader.load_tensors_mapped(mapping, load_opts);
+            auto tensors = reader.load_tensors_mapped(mapping, load_opts, &safetensors_load_report_);
             for (const auto& kv : tensors) {
-                qwen_->assign_weight(kv.first, kv.second);
+                qwen_->assign_weight(kv.first, kv.second, load_opts.strict_shape_check);
             }
             MemoryManager::instance().clear_unused_memory();
             break;
@@ -183,8 +141,41 @@ TensorPtr AutoModelForCausalLM::forward(const TensorPtr& input_ids,
             return gpt2_->forward(input_ids, attention_mask);
         case ModelFamily::Gemma:
             return gemma_->forward(input_ids, attention_mask);
+        case ModelFamily::Llama:
+            return llama_->forward(input_ids, attention_mask);
         case ModelFamily::Qwen:
             return qwen_->forward(input_ids, attention_mask);
+        default:
+            throw std::runtime_error("AutoModelForCausalLM: unsupported model family");
+    }
+}
+
+TensorPtr AutoModelForCausalLM::forward_hidden(const TensorPtr& input_ids,
+                                               const TensorPtr& attention_mask) {
+    switch (spec_.family) {
+        case ModelFamily::GPT2:
+            return gpt2_->forward_hidden(input_ids, attention_mask);
+        case ModelFamily::Gemma:
+            return gemma_->forward_hidden(input_ids, attention_mask);
+        case ModelFamily::Llama:
+            return llama_->forward_hidden(input_ids, attention_mask);
+        case ModelFamily::Qwen:
+            return qwen_->forward_hidden(input_ids, attention_mask);
+        default:
+            throw std::runtime_error("AutoModelForCausalLM: unsupported model family");
+    }
+}
+
+TensorPtr AutoModelForCausalLM::lm_head_weight_for_loss() const {
+    switch (spec_.family) {
+        case ModelFamily::GPT2:
+            return gpt2_->lm_head_weight();
+        case ModelFamily::Gemma:
+            return gemma_->lm_head_weight_for_loss();
+        case ModelFamily::Llama:
+            return llama_->lm_head_weight_for_loss();
+        case ModelFamily::Qwen:
+            return qwen_->embedding_weight();
         default:
             throw std::runtime_error("AutoModelForCausalLM: unsupported model family");
     }
@@ -195,17 +186,24 @@ void AutoModelForCausalLM::init_lora(const AutoLoraConfig& config) {
         case ModelFamily::GPT2: {
             gpt2_->init_lora_modules();
             gpt2_lora_ = std::make_unique<LoraInjector>();
-            gpt2_lora_->inject(*gpt2_, make_gpt2_lora_spec(config));
+            gpt2_lora_->inject(*gpt2_, make_gpt2_lora_spec(make_family_lora_request(config)));
             break;
         }
         case ModelFamily::Gemma: {
             gemma_lora_ = std::make_unique<GemmaLoraInjector>();
-            gemma_lora_->inject(*gemma_, make_gemma_lora_spec(config));
+            gemma_lora_->inject(*gemma_, make_gemma_lora_spec(make_family_lora_request(config)));
             break;
         }
+        case ModelFamily::Llama:
+            llama_->init_lora(config.rank, config.alpha, config.dropout,
+                              is_qv_only_attention_request(make_family_lora_request(config)),
+                              config.seed);
+            llama_->freeze_base();
+            break;
         case ModelFamily::Qwen:
             qwen_->init_lora(config.rank, config.alpha, config.dropout,
-                             qwen_qv_only(config), config.seed);
+                             is_qv_only_attention_request(make_family_lora_request(config)),
+                             config.seed);
             qwen_->freeze_base();
             break;
         default:
@@ -219,6 +217,8 @@ std::vector<TensorPtr> AutoModelForCausalLM::parameters() {
             return gpt2_->parameters();
         case ModelFamily::Gemma:
             return gemma_->parameters();
+        case ModelFamily::Llama:
+            return llama_->parameters();
         case ModelFamily::Qwen:
             return qwen_->parameters();
         default:
@@ -232,8 +232,25 @@ std::vector<TensorPtr> AutoModelForCausalLM::trainable_parameters() {
             return gpt2_->get_lora_parameters();
         case ModelFamily::Gemma:
             return gemma_->get_lora_parameters();
+        case ModelFamily::Llama:
+            return llama_->get_lora_parameters();
         case ModelFamily::Qwen:
             return qwen_->get_lora_parameters();
+        default:
+            throw std::runtime_error("AutoModelForCausalLM: unsupported model family");
+    }
+}
+
+std::vector<std::pair<std::string, TensorPtr>> AutoModelForCausalLM::named_trainable_parameters() {
+    switch (spec_.family) {
+        case ModelFamily::GPT2:
+            return gpt2_->named_lora_parameters();
+        case ModelFamily::Gemma:
+            return gemma_->named_lora_parameters();
+        case ModelFamily::Llama:
+            return llama_->named_lora_parameters();
+        case ModelFamily::Qwen:
+            return qwen_->named_lora_parameters();
         default:
             throw std::runtime_error("AutoModelForCausalLM: unsupported model family");
     }

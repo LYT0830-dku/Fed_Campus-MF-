@@ -40,6 +40,27 @@ ADB="$(mf_android_resolve_adb)"
 APK="$ANDROID_DIR/sdk-sample/build/outputs/apk/debug/sdk-sample-debug.apk"
 PKG="com.mobilefinetuner.sdk.sample"
 ACTIVITY="$PKG/.MainActivity"
+INSTALL_TIMEOUT_SECONDS="${MFT_SDK_INSTALL_TIMEOUT_SECONDS:-180}"
+
+is_installed() {
+  "$ADB" shell pm list packages | rg -q "^package:$PKG$"
+}
+
+install_apk() {
+  local first_status=0
+  run_with_timeout "$INSTALL_TIMEOUT_SECONDS" "$ADB" install -r -t "$APK" || first_status=$?
+  if [ "$first_status" -eq 0 ]; then
+    return 0
+  fi
+
+  if [ "$first_status" -eq 124 ]; then
+    echo "[Android SDK] Streaming APK install timed out after ${INSTALL_TIMEOUT_SECONDS}s; retrying with --no-streaming." >&2
+  else
+    echo "[Android SDK] Streaming APK install failed with status $first_status; retrying with --no-streaming." >&2
+  fi
+
+  run_with_timeout "$INSTALL_TIMEOUT_SECONDS" "$ADB" install --no-streaming -r -t "$APK"
+}
 
 cd "$ANDROID_DIR"
 ./gradlew :sdk-sample:assembleDebug
@@ -48,14 +69,18 @@ cd "$ANDROID_DIR"
 "$ADB" logcat -c
 
 if [ "${MFT_SDK_SMOKE_SKIP_INSTALL:-0}" = "1" ]; then
-  if ! "$ADB" shell pm list packages | rg -q "^package:$PKG$"; then
+  if ! is_installed; then
     echo "[Android SDK] MFT_SDK_SMOKE_SKIP_INSTALL=1 was set, but $PKG is not installed." >&2
     exit 1
   fi
 else
-  if ! run_with_timeout 120 "$ADB" install --no-streaming -r "$APK"; then
-    if "$ADB" shell pm list packages | rg -q "^package:$PKG$"; then
-      echo "[Android SDK] APK install timed out, but $PKG is already installed; continuing with launch smoke." >&2
+  if [ "${MFT_SDK_SMOKE_FORCE_REINSTALL:-0}" = "1" ] && is_installed; then
+    "$ADB" shell pm uninstall "$PKG" >/dev/null || true
+  fi
+
+  if ! install_apk; then
+    if is_installed; then
+      echo "[Android SDK] APK install did not complete, but $PKG is installed; continuing with launch smoke." >&2
     else
       echo "[Android SDK] APK install timed out. Unlock the phone and allow USB app installation, then retry." >&2
       exit 124

@@ -429,9 +429,24 @@ class ApplyRoPEBackward : public BackwardFunction {
 private:
     int head_dim_;
     float rope_theta_;
+    bool use_llama3_scaling_;
+    float rope_scaling_factor_;
+    float rope_low_freq_factor_;
+    float rope_high_freq_factor_;
+    int rope_original_max_position_embeddings_;
 public:
-    ApplyRoPEBackward(int seq_len [[maybe_unused]], int head_dim, float rope_theta)
-        : head_dim_(head_dim), rope_theta_(rope_theta) {}
+    ApplyRoPEBackward(int seq_len [[maybe_unused]], int head_dim, float rope_theta,
+                      bool use_llama3_scaling = false,
+                      float rope_scaling_factor = 1.0f,
+                      float rope_low_freq_factor = 1.0f,
+                      float rope_high_freq_factor = 4.0f,
+                      int rope_original_max_position_embeddings = 0)
+        : head_dim_(head_dim), rope_theta_(rope_theta),
+          use_llama3_scaling_(use_llama3_scaling),
+          rope_scaling_factor_(rope_scaling_factor),
+          rope_low_freq_factor_(rope_low_freq_factor),
+          rope_high_freq_factor_(rope_high_freq_factor),
+          rope_original_max_position_embeddings_(rope_original_max_position_embeddings) {}
     std::vector<TensorPtr> apply(const TensorPtr& grad_output) override;
 };
 

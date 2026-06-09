@@ -117,11 +117,14 @@ set(FINETUNE_SOURCES
     finetune_ops/graph/safetensors_loader.cpp
     finetune_ops/graph/gpt2_model.cpp
     finetune_ops/graph/lora_injector.cpp
+    finetune_ops/graph/model_family_adapter.cpp
     finetune_ops/graph/model_registry.cpp
     finetune_ops/graph/auto_model.cpp
     # Qwen model and MMLU dataset
+    finetune_ops/graph/llama_model.cpp
     finetune_ops/graph/qwen_model.cpp
     finetune_ops/data/mmlu_dataset.cpp
+    finetune_ops/data/causal_lm_batch.cpp
     
     # Stage B: data loading and training
     finetune_ops/data/wikitext2_dataset.cpp
@@ -382,6 +385,14 @@ if(BUILD_TESTS)
         target_link_libraries(test_lora_linear operators)
         add_test(NAME LoRALinearUnit COMMAND test_lora_linear)
     endif()
+
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/nn/test_lora_step_alignment.cpp)
+        add_executable(test_lora_step_alignment
+            finetune_ops/nn/test_lora_step_alignment.cpp
+        )
+        target_link_libraries(test_lora_step_alignment operators)
+        add_test(NAME LoRAStepAlignment COMMAND test_lora_step_alignment)
+    endif()
     
     # Cross-Entropy gradient test
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/test_ce_grad.cpp)
@@ -422,6 +433,28 @@ if(BUILD_TESTS)
         )
         target_link_libraries(test_auto_model operators)
         add_test(NAME AutoModel COMMAND test_auto_model)
+    endif()
+
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/graph/test_auto_model_alignment.cpp)
+        add_executable(test_auto_model_alignment
+            finetune_ops/graph/test_auto_model_alignment.cpp
+        )
+        target_link_libraries(test_auto_model_alignment operators)
+        add_test(NAME AutoModelAlignment COMMAND test_auto_model_alignment)
+        set_tests_properties(AutoModelAlignment PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+        )
+    endif()
+
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/graph/test_auto_model_peft_step_alignment.cpp)
+        add_executable(test_auto_model_peft_step_alignment
+            finetune_ops/graph/test_auto_model_peft_step_alignment.cpp
+        )
+        target_link_libraries(test_auto_model_peft_step_alignment operators)
+        add_test(NAME AutoModelPEFTStepAlignment COMMAND test_auto_model_peft_step_alignment)
+        set_tests_properties(AutoModelPEFTStepAlignment PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+        )
     endif()
 
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/test_gpt2_lora_two_step_smoke.cpp)
@@ -513,6 +546,14 @@ if(BUILD_TESTS)
         )
         target_link_libraries(test_jsonl_mask_alignment operators)
         add_test(NAME JsonlMaskAlignment COMMAND test_jsonl_mask_alignment)
+    endif()
+
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/data/test_causal_lm_batch.cpp)
+        add_executable(test_causal_lm_batch
+            finetune_ops/data/test_causal_lm_batch.cpp
+        )
+        target_link_libraries(test_causal_lm_batch operators)
+        add_test(NAME CausalLMBatch COMMAND test_causal_lm_batch)
     endif()
 
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/graph/test_gemma_config.cpp)

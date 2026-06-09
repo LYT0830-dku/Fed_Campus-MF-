@@ -84,8 +84,14 @@ public:
 
     TensorPtr forward(const TensorPtr& input_ids,
                       const TensorPtr& attention_mask = nullptr);
+    TensorPtr forward_hidden(const TensorPtr& input_ids,
+                             const TensorPtr& attention_mask = nullptr);
+    TensorPtr lm_head(const TensorPtr& hidden);
+    TensorPtr lm_head_weight_for_loss() const;
 
-    void assign_weight(const std::string& key, const TensorPtr& tensor);
+    void assign_weight(const std::string& key,
+                       const TensorPtr& tensor,
+                       bool strict_shape_check = true);
 
     const GemmaTextConfig& config() const { return config_; }
 
@@ -94,6 +100,7 @@ public:
     const GemmaBlockWeights& get_block(int i) const;
     std::vector<TensorPtr> parameters() const;
     std::vector<TensorPtr> get_lora_parameters() const;
+    std::vector<std::pair<std::string, TensorPtr>> named_lora_parameters() const;
     void merge_lora();
     void unmerge_lora();
 

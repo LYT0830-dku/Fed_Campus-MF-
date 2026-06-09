@@ -28,14 +28,28 @@ struct TokenizerSpecialTokens {
     int unk_token_id = -1;
 };
 
+struct TokenizerEncodeOptions {
+    bool add_special_tokens = false;
+    int max_length = 0;
+    bool truncation = true;
+};
+
+struct TokenizerDecodeOptions {
+    bool skip_special_tokens = false;
+};
+
 class Tokenizer {
 public:
     Tokenizer() = default;
     virtual ~Tokenizer() = default;
 
     virtual std::vector<int> encode(const std::string& text) = 0;
+    virtual std::vector<int> encode_with_options(const std::string& text,
+                                                 const TokenizerEncodeOptions& options);
 
     virtual std::string decode(const std::vector<int>& tokens) = 0;
+    virtual std::string decode_with_options(const std::vector<int>& tokens,
+                                            const TokenizerDecodeOptions& options);
 
     virtual int get_vocab_size() const = 0;
 
@@ -43,6 +57,8 @@ public:
     virtual int get_bos_token() const = 0;
     virtual int get_pad_token() const = 0;
     virtual int get_unk_token() const = 0;
+    virtual bool default_add_special_tokens() const { return false; }
+    virtual bool default_left_padding() const { return false; }
 
     EncodedInput encode_with_attention(const std::string& text,
                                        int max_length = 0,

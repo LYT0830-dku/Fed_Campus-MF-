@@ -18,6 +18,35 @@ namespace ops {
 
 namespace {
 
+std::string qwen_shape_to_string(const std::vector<int64_t>& shape) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < shape.size(); ++i) {
+        if (i > 0) {
+            oss << ",";
+        }
+        oss << shape[i];
+    }
+    oss << "]";
+    return oss.str();
+}
+
+void qwen_assign_checked(TensorPtr& slot,
+                         const std::string& key,
+                         const TensorPtr& tensor,
+                         bool strict_shape_check) {
+    if (!tensor) {
+        throw std::runtime_error("QwenModel::assign_weight received null tensor for " + key);
+    }
+    if (strict_shape_check && slot && slot->shape() != tensor->shape()) {
+        throw std::runtime_error(
+            "QwenModel::assign_weight shape mismatch for " + key +
+            ": expected=" + qwen_shape_to_string(slot->shape()) +
+            ", actual=" + qwen_shape_to_string(tensor->shape()));
+    }
+    slot = tensor;
+}
+
 float qwen_weight_value(const TensorPtr& weight, int64_t idx) {
     if (weight->dtype() == kFloat32) {
         return weight->data<float>()[idx];
@@ -102,9 +131,11 @@ QwenModel::QwenModel(const QwenConfig& cfg) : config_(cfg) {
 }
 
 // -------------- Weight dispatch --------------
-void QwenModel::assign_weight(const std::string& key, const TensorPtr& tensor) {
-    if (key == "embed_tokens.weight") embed_tokens_ = tensor;
-    else if (key == "final_norm.weight") final_norm_weight_ = tensor;
+void QwenModel::assign_weight(const std::string& key,
+                              const TensorPtr& tensor,
+                              bool strict_shape_check) {
+    if (key == "embed_tokens.weight") qwen_assign_checked(embed_tokens_, key, tensor, strict_shape_check);
+    else if (key == "final_norm.weight") qwen_assign_checked(final_norm_weight_, key, tensor, strict_shape_check);
     else {
         std::regex pat(R"(layers\.(\d+)\.(.+))");
         std::smatch m;
@@ -113,18 +144,18 @@ void QwenModel::assign_weight(const std::string& key, const TensorPtr& tensor) {
             auto sub = m[2].str();
             if (idx < 0 || idx >= config_.num_hidden_layers) throw std::runtime_error("bad layer idx");
             auto& b = layers_[idx];
-            if (sub == "input_norm.weight") b.input_norm_weight = tensor;
-            else if (sub == "post_norm.weight") b.post_norm_weight = tensor;
-            else if (sub == "self_attn.q_proj.weight") b.q_proj_weight = tensor;
-            else if (sub == "self_attn.q_proj.bias") b.q_proj_bias = tensor;
-            else if (sub == "self_attn.k_proj.weight") b.k_proj_weight = tensor;
-            else if (sub == "self_attn.k_proj.bias") b.k_proj_bias = tensor;
-            else if (sub == "self_attn.v_proj.weight") b.v_proj_weight = tensor;
-            else if (sub == "self_attn.v_proj.bias") b.v_proj_bias = tensor;
-            else if (sub == "self_attn.o_proj.weight") b.o_proj_weight = tensor;
-            else if (sub == "mlp.gate_proj.weight") b.gate_proj_weight = tensor;
-            else if (sub == "mlp.up_proj.weight") b.up_proj_weight = tensor;
-            else if (sub == "mlp.down_proj.weight") b.down_proj_weight = tensor;
+            if (sub == "input_norm.weight") qwen_assign_checked(b.input_norm_weight, key, tensor, strict_shape_check);
+            else if (sub == "post_norm.weight") qwen_assign_checked(b.post_norm_weight, key, tensor, strict_shape_check);
+            else if (sub == "self_attn.q_proj.weight") qwen_assign_checked(b.q_proj_weight, key, tensor, strict_shape_check);
+            else if (sub == "self_attn.q_proj.bias") qwen_assign_checked(b.q_proj_bias, key, tensor, strict_shape_check);
+            else if (sub == "self_attn.k_proj.weight") qwen_assign_checked(b.k_proj_weight, key, tensor, strict_shape_check);
+            else if (sub == "self_attn.k_proj.bias") qwen_assign_checked(b.k_proj_bias, key, tensor, strict_shape_check);
+            else if (sub == "self_attn.v_proj.weight") qwen_assign_checked(b.v_proj_weight, key, tensor, strict_shape_check);
+            else if (sub == "self_attn.v_proj.bias") qwen_assign_checked(b.v_proj_bias, key, tensor, strict_shape_check);
+            else if (sub == "self_attn.o_proj.weight") qwen_assign_checked(b.o_proj_weight, key, tensor, strict_shape_check);
+            else if (sub == "mlp.gate_proj.weight") qwen_assign_checked(b.gate_proj_weight, key, tensor, strict_shape_check);
+            else if (sub == "mlp.up_proj.weight") qwen_assign_checked(b.up_proj_weight, key, tensor, strict_shape_check);
+            else if (sub == "mlp.down_proj.weight") qwen_assign_checked(b.down_proj_weight, key, tensor, strict_shape_check);
         }
     }
 }
@@ -134,16 +165,21 @@ void QwenModel::init_lora(int rank, float alpha, float dropout [[maybe_unused]],
     float scale = alpha / rank;
     std::mt19937 rng(static_cast<uint32_t>(seed));
     std::uniform_real_distribution<float> init_dist(-0.01f, 0.01f);
-    for (auto& b : layers_) {
+    for (size_t layer_idx = 0; layer_idx < layers_.size(); ++layer_idx) {
+        auto& b = layers_[layer_idx];
         if (b.lora_initialized) continue;
         
         // Create LoRALinear wrappers
         b.q_lin = std::make_unique<LoRALinear>(b.q_proj_weight, b.q_proj_bias);
         b.v_lin = std::make_unique<LoRALinear>(b.v_proj_weight, b.v_proj_bias);
+        b.q_lin->set_debug_name("layers." + std::to_string(layer_idx) + ".self_attn.q_proj");
+        b.v_lin->set_debug_name("layers." + std::to_string(layer_idx) + ".self_attn.v_proj");
         
         if (!qv_only) {
             b.k_lin = std::make_unique<LoRALinear>(b.k_proj_weight, b.k_proj_bias);
             b.o_lin = std::make_unique<LoRALinear>(b.o_proj_weight, nullptr);
+            b.k_lin->set_debug_name("layers." + std::to_string(layer_idx) + ".self_attn.k_proj");
+            b.o_lin->set_debug_name("layers." + std::to_string(layer_idx) + ".self_attn.o_proj");
         }
         
         auto make_AB = [&](int in_dim, int out_dim) -> std::pair<TensorPtr, TensorPtr> {
@@ -199,6 +235,23 @@ std::vector<TensorPtr> QwenModel::get_lora_parameters() const {
         add(b.v_lin);
         // K and O may be absent when qv_only mode is enabled
         if (b.k_lin) add(b.k_lin); 
+        if (b.o_lin) add(b.o_lin);
+    }
+    return params;
+}
+
+std::vector<std::pair<std::string, TensorPtr>> QwenModel::named_lora_parameters() const {
+    std::vector<std::pair<std::string, TensorPtr>> params;
+    for (const auto& b : layers_) {
+        if (!b.lora_initialized) continue;
+        auto add = [&](const std::unique_ptr<LoRALinear>& lin) {
+            if (!lin || lin->slices().empty()) return;
+            auto ps = lin->debug_params();
+            params.insert(params.end(), ps.begin(), ps.end());
+        };
+        add(b.q_lin);
+        add(b.v_lin);
+        if (b.k_lin) add(b.k_lin);
         if (b.o_lin) add(b.o_lin);
     }
     return params;
@@ -331,7 +384,7 @@ TensorPtr QwenModel::mlp(const TensorPtr& x, QwenBlock& blk) {
     return down;
 }
 
-// -------------- 前向 --------------
+// -------------- Forward --------------
 TensorPtr QwenModel::forward_hidden(const TensorPtr& input_ids, const TensorPtr& attention_mask) {
     auto x = embedding_lookup(embed_tokens_, input_ids); // [B,S,H]
 

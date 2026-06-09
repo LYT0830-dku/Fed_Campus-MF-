@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
         cout << "fewshot       : " << args.fewshot << endl;
         cout << "pretrained_dir: " << args.pretrained_dir << endl;
 
-        // 1) 構建模型 + 載入權重
+        // 1) Build model and load weights.
         GPT2Config cfg = GPT2Config::from_pretrained(args.pretrained_dir + "/config.json");
         GPT2Model model(cfg);
         model.tie_weights();
@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
             model.assign_weight(kv.first, kv.second);
         }
 
-        // 2) LoRA 加載（可選）
+        // 2) Load LoRA weights when provided.
         LoraInjector injector;
         if (!args.lora_path.empty()) {
             cout << "[LoRA] Loading from " << args.lora_path << endl;
@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
         GPT2BPETokenizer tok(tok_cfg);
         tok.load();
 
-        // 4) 讀取數據並評測
+        // 4) Read data and evaluate.
         cout << "[Eval] Loading MMLU CSV..." << endl;
         MMLURunner runner(args.mmlu_root, args.split);
         runner.load();
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
         auto result = runner.evaluate(model, tok, args.fewshot);
         cout << "[Eval] Evaluation finished." << endl;
 
-        // 5) 輸出
+        // 5) Write output.
         cout << "\nPer-subject:" << endl;
         for (const auto& r : result.per_subject) {
             printf("  %-30s | n=%4d | acc=%.2f%%\n", r.subject.c_str(), r.total, r.accuracy()*100.0f);
@@ -148,4 +148,3 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
-

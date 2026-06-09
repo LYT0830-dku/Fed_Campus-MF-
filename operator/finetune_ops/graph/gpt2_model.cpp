@@ -20,6 +20,35 @@ namespace ops {
 // GPT2Config loader from HuggingFace-style config.json
 // ----------------------------------------------------------------------------
 namespace {
+static std::string shape_to_string(const std::vector<int64_t>& shape) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < shape.size(); ++i) {
+        if (i > 0) {
+            oss << ",";
+        }
+        oss << shape[i];
+    }
+    oss << "]";
+    return oss.str();
+}
+
+static void assign_checked(TensorPtr& slot,
+                           const std::string& key,
+                           const TensorPtr& tensor,
+                           bool strict_shape_check) {
+    if (!tensor) {
+        throw std::runtime_error("GPT2Model::assign_weight received null tensor for " + key);
+    }
+    if (strict_shape_check && slot && slot->shape() != tensor->shape()) {
+        throw std::runtime_error(
+            "GPT2Model::assign_weight shape mismatch for " + key +
+            ": expected=" + shape_to_string(slot->shape()) +
+            ", actual=" + shape_to_string(tensor->shape()));
+    }
+    slot = tensor;
+}
+
 static std::string read_text_file(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) {
@@ -203,7 +232,8 @@ void GPT2Model::tie_weights() {
 
 void GPT2Model::init_lora_modules() {
     // Initialize LoRALinear modules for each block (referencing loaded weights)
-    for (auto& block : blocks_) {
+    for (size_t layer_idx = 0; layer_idx < blocks_.size(); ++layer_idx) {
+        auto& block = blocks_[layer_idx];
         if (block.lora_initialized) continue;
         
         // Create LoRALinear modules (referencing base weights)
@@ -215,6 +245,10 @@ void GPT2Model::init_lora_modules() {
             block.mlp_fc_in_weight, block.mlp_fc_in_bias);
         block.fc_out_lin = std::make_unique<LoRALinear>(
             block.mlp_fc_out_weight, block.mlp_fc_out_bias);
+        block.qkv_lin->set_debug_name("blocks." + std::to_string(layer_idx) + ".attn.qkv");
+        block.proj_lin->set_debug_name("blocks." + std::to_string(layer_idx) + ".attn.proj");
+        block.fc_in_lin->set_debug_name("blocks." + std::to_string(layer_idx) + ".mlp.fc_in");
+        block.fc_out_lin->set_debug_name("blocks." + std::to_string(layer_idx) + ".mlp.fc_out");
         
         block.lora_initialized = true;
     }
@@ -240,18 +274,39 @@ std::vector<TensorPtr> GPT2Model::get_lora_parameters() {
     return params;
 }
 
-void GPT2Model::assign_weight(const std::string& key, const TensorPtr& tensor) {
-    // 按内部键名分发到对应权重
+std::vector<std::pair<std::string, TensorPtr>> GPT2Model::named_lora_parameters() {
+    std::vector<std::pair<std::string, TensorPtr>> params;
+    for (const auto& block : blocks_) {
+        if (!block.lora_initialized) continue;
+
+        auto add_params = [&](const std::unique_ptr<LoRALinear>& lin) {
+            if (!lin || lin->slices().empty()) return;
+            auto ps = lin->debug_params();
+            params.insert(params.end(), ps.begin(), ps.end());
+        };
+
+        add_params(block.qkv_lin);
+        add_params(block.proj_lin);
+        add_params(block.fc_in_lin);
+        add_params(block.fc_out_lin);
+    }
+    return params;
+}
+
+void GPT2Model::assign_weight(const std::string& key,
+                              const TensorPtr& tensor,
+                              bool strict_shape_check) {
+    // Dispatch internal key names to their corresponding weights.
     if (key == "wte.weight") {
-        wte_weight_ = tensor;
+        assign_checked(wte_weight_, key, tensor, strict_shape_check);
     } else if (key == "wpe.weight") {
-        wpe_weight_ = tensor;
+        assign_checked(wpe_weight_, key, tensor, strict_shape_check);
     } else if (key == "ln_f.weight") {
-        ln_f_weight_ = tensor;
+        assign_checked(ln_f_weight_, key, tensor, strict_shape_check);
     } else if (key == "ln_f.bias") {
-        ln_f_bias_ = tensor;
+        assign_checked(ln_f_bias_, key, tensor, strict_shape_check);
     } else {
-        // 解析 blocks.N.xxx
+        // Parse blocks.N.xxx.
         std::regex block_pattern(R"(blocks\.(\d+)\.(.+))");
         std::smatch match;
         if (std::regex_match(key, match, block_pattern)) {
@@ -264,18 +319,18 @@ void GPT2Model::assign_weight(const std::string& key, const TensorPtr& tensor) {
             
             auto& block = blocks_[block_idx];
             
-            if (sub_key == "ln_1.weight") block.ln_1_weight = tensor;
-            else if (sub_key == "ln_1.bias") block.ln_1_bias = tensor;
-            else if (sub_key == "attn.qkv.weight") block.attn_qkv_weight = tensor;
-            else if (sub_key == "attn.qkv.bias") block.attn_qkv_bias = tensor;
-            else if (sub_key == "attn.proj.weight") block.attn_proj_weight = tensor;
-            else if (sub_key == "attn.proj.bias") block.attn_proj_bias = tensor;
-            else if (sub_key == "ln_2.weight") block.ln_2_weight = tensor;
-            else if (sub_key == "ln_2.bias") block.ln_2_bias = tensor;
-            else if (sub_key == "mlp.fc_in.weight") block.mlp_fc_in_weight = tensor;
-            else if (sub_key == "mlp.fc_in.bias") block.mlp_fc_in_bias = tensor;
-            else if (sub_key == "mlp.fc_out.weight") block.mlp_fc_out_weight = tensor;
-            else if (sub_key == "mlp.fc_out.bias") block.mlp_fc_out_bias = tensor;
+            if (sub_key == "ln_1.weight") assign_checked(block.ln_1_weight, key, tensor, strict_shape_check);
+            else if (sub_key == "ln_1.bias") assign_checked(block.ln_1_bias, key, tensor, strict_shape_check);
+            else if (sub_key == "attn.qkv.weight") assign_checked(block.attn_qkv_weight, key, tensor, strict_shape_check);
+            else if (sub_key == "attn.qkv.bias") assign_checked(block.attn_qkv_bias, key, tensor, strict_shape_check);
+            else if (sub_key == "attn.proj.weight") assign_checked(block.attn_proj_weight, key, tensor, strict_shape_check);
+            else if (sub_key == "attn.proj.bias") assign_checked(block.attn_proj_bias, key, tensor, strict_shape_check);
+            else if (sub_key == "ln_2.weight") assign_checked(block.ln_2_weight, key, tensor, strict_shape_check);
+            else if (sub_key == "ln_2.bias") assign_checked(block.ln_2_bias, key, tensor, strict_shape_check);
+            else if (sub_key == "mlp.fc_in.weight") assign_checked(block.mlp_fc_in_weight, key, tensor, strict_shape_check);
+            else if (sub_key == "mlp.fc_in.bias") assign_checked(block.mlp_fc_in_bias, key, tensor, strict_shape_check);
+            else if (sub_key == "mlp.fc_out.weight") assign_checked(block.mlp_fc_out_weight, key, tensor, strict_shape_check);
+            else if (sub_key == "mlp.fc_out.bias") assign_checked(block.mlp_fc_out_bias, key, tensor, strict_shape_check);
             else {
                 std::cerr << "[WARN] Unknown sub_key: " << sub_key << std::endl;
             }
@@ -317,8 +372,8 @@ std::pair<TensorPtr*, TensorPtr*> GPT2Model::mlp_fc_out_params(int i) {
 // Forward pass (core)
 // ============================================================================
 
-TensorPtr GPT2Model::forward(const TensorPtr& input_ids,
-                             const TensorPtr& attention_mask) {
+TensorPtr GPT2Model::forward_hidden(const TensorPtr& input_ids,
+                                    const TensorPtr& attention_mask) {
     const auto& shape = input_ids->shape();
     int64_t batch = shape[0];
     int64_t seq_len = shape[1];
@@ -396,13 +451,16 @@ TensorPtr GPT2Model::forward(const TensorPtr& input_ids,
     // 4. Final LayerNorm
     x = layer_norm(x, ln_f_weight_, ln_f_bias_);
     
-    // 5. lm_head (tied to wte; no transpose because wte is [V,C] used as embedding)
-    // Linear weights are [in,out], so wte is [V,C]=[out,in] for embedding.
-    // lm_head needs [C,V], hence transpose.
-    auto wte_t = transpose(wte_weight_, 0, 1);  // [C,V]
-    TensorPtr logits = matmul(x, wte_t);  // [B,S,C] @ [C,V] → [B,S,V]
-    
-    return logits;
+    return x;
+}
+
+TensorPtr GPT2Model::lm_head(const TensorPtr& hidden) {
+    return matmul_rhs_T(hidden, wte_weight_);  // [B,S,C] @ [V,C]^T -> [B,S,V]
+}
+
+TensorPtr GPT2Model::forward(const TensorPtr& input_ids,
+                             const TensorPtr& attention_mask) {
+    return lm_head(forward_hidden(input_ids, attention_mask));
 }
 
 // ============================================================================
@@ -614,8 +672,8 @@ TensorPtr GPT2Model::forward_block(const TensorPtr& x_in,
     // Padded batches must stay on the standard implementation so padding scores
     // are masked correctly.
     if (config_.use_memory_efficient_attention && !pad_mask) {
-        // 🚀 Memory-efficient attention: streamed softmax without materializing S×S
-        // Memory cost: O(B·H·S·D) vs standard O(B·H·S²)
+        // Memory-efficient attention: streamed softmax without materializing SxS.
+        // Memory cost: O(B*H*S*D) vs standard O(B*H*S*S).
         MemoryEfficientAttentionConfig attn_config;
         attn_config.use_causal_mask = true;
         attn_config.scale = 1.0f / std::sqrt(static_cast<float>(Hd));

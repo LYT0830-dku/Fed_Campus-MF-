@@ -8,6 +8,8 @@ namespace ops {
 enum class ModelFamily {
     GPT2,
     Gemma,
+    Llama,
+    Mistral,
     Qwen,
     Unknown,
 };

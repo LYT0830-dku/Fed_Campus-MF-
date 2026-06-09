@@ -70,7 +70,8 @@ public final class MobileFineTuner implements AutoCloseable {
                 config.learningRate,
                 config.weightDecay,
                 config.maxGradNorm,
-                config.ignoreIndex
+                config.ignoreIndex,
+                config.useStreamingLmLoss
         );
     }
 
@@ -97,7 +98,28 @@ public final class MobileFineTuner implements AutoCloseable {
                 batchSize,
                 sequenceLength
         );
-        return new TrainStepResult((float) result[0], (int) result[1]);
+        return new TrainStepResult((float) result[0], (int) result[1], (int) result[2]);
+    }
+
+    public TrainStepResult trainTextBatch(String[] texts, int sequenceLength) {
+        return trainTextBatch(texts, sequenceLength, false);
+    }
+
+    public TrainStepResult trainTextBatch(String[] texts, int sequenceLength, boolean appendEos) {
+        if (texts == null || texts.length == 0) {
+            throw new IllegalArgumentException("texts must contain at least one item");
+        }
+        if (sequenceLength <= 1) {
+            throw new IllegalArgumentException("sequenceLength must be > 1");
+        }
+        String[] copied = Arrays.copyOf(texts, texts.length);
+        for (String text : copied) {
+            if (text == null) {
+                throw new IllegalArgumentException("texts must not contain null entries");
+            }
+        }
+        double[] result = nativeTrainTextBatch(requireOpen(), copied, sequenceLength, appendEos);
+        return new TrainStepResult((float) result[0], (int) result[1], (int) result[2]);
     }
 
     public int trainableTensorCount() {
@@ -155,7 +177,8 @@ public final class MobileFineTuner implements AutoCloseable {
             float learningRate,
             float weightDecay,
             float maxGradNorm,
-            int ignoreIndex
+            int ignoreIndex,
+            boolean useStreamingLmLoss
     );
     private static native double[] nativeTrainStep(
             long handle,
@@ -164,6 +187,12 @@ public final class MobileFineTuner implements AutoCloseable {
             int[] labels,
             int batchSize,
             int sequenceLength
+    );
+    private static native double[] nativeTrainTextBatch(
+            long handle,
+            String[] texts,
+            int sequenceLength,
+            boolean appendEos
     );
     private static native int nativeTrainableTensorCount(long handle);
     private static native void nativeClose(long handle);
@@ -210,8 +239,19 @@ public final class MobileFineTuner implements AutoCloseable {
         public final float weightDecay;
         public final float maxGradNorm;
         public final int ignoreIndex;
+        public final boolean useStreamingLmLoss;
 
         public TrainerConfig(float learningRate, float weightDecay, float maxGradNorm, int ignoreIndex) {
+            this(learningRate, weightDecay, maxGradNorm, ignoreIndex, true);
+        }
+
+        public TrainerConfig(
+                float learningRate,
+                float weightDecay,
+                float maxGradNorm,
+                int ignoreIndex,
+                boolean useStreamingLmLoss
+        ) {
             if (learningRate <= 0.0f) {
                 throw new IllegalArgumentException("learningRate must be positive");
             }
@@ -225,6 +265,7 @@ public final class MobileFineTuner implements AutoCloseable {
             this.weightDecay = weightDecay;
             this.maxGradNorm = maxGradNorm;
             this.ignoreIndex = ignoreIndex;
+            this.useStreamingLmLoss = useStreamingLmLoss;
         }
 
         public static TrainerConfig defaults() {
@@ -235,10 +276,12 @@ public final class MobileFineTuner implements AutoCloseable {
     public static final class TrainStepResult {
         public final float loss;
         public final int trainableTensorCount;
+        public final int validLabelCount;
 
-        private TrainStepResult(float loss, int trainableTensorCount) {
+        private TrainStepResult(float loss, int trainableTensorCount, int validLabelCount) {
             this.loss = loss;
             this.trainableTensorCount = trainableTensorCount;
+            this.validLabelCount = validLabelCount;
         }
     }
 

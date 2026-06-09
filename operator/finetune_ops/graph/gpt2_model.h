@@ -86,6 +86,11 @@ public:
      */
     TensorPtr forward(const TensorPtr& input_ids,
                      const TensorPtr& attention_mask = nullptr);
+
+    TensorPtr forward_hidden(const TensorPtr& input_ids,
+                             const TensorPtr& attention_mask = nullptr);
+    TensorPtr lm_head(const TensorPtr& hidden);
+    const TensorPtr& lm_head_weight() const { return wte_weight_; }
     
     /**
      * @brief Tie lm_head.weight ↔ wte.weight (shared memory)
@@ -97,7 +102,9 @@ public:
      * @param key internal key (e.g., "wte.weight", "blocks.0.ln_1.weight")
      * @param tensor weight tensor
      */
-    void assign_weight(const std::string& key, const TensorPtr& tensor);
+    void assign_weight(const std::string& key,
+                       const TensorPtr& tensor,
+                       bool strict_shape_check = true);
     
     /**
      * @brief Fetch all parameters (for optimizer)
@@ -139,6 +146,7 @@ public:
      * @brief Collect all LoRA trainable parameters
      */
     std::vector<TensorPtr> get_lora_parameters();
+    std::vector<std::pair<std::string, TensorPtr>> named_lora_parameters();
     
     /**
      * @brief Initialize LoRA modules (call after loading weights)
@@ -162,7 +170,7 @@ private:
     // lm_head (tied to wte_weight_, not stored separately)
     bool weights_tied_ = false;
     
-    // 内部工具
+    // Internal helpers.
     TensorPtr build_causal_mask(int seq_len);
     TensorPtr build_padding_mask(const TensorPtr& attention_mask);
     TensorPtr layer_norm(const TensorPtr& x, const TensorPtr& weight, const TensorPtr& bias);
@@ -174,4 +182,3 @@ private:
 };
 
 }  // namespace ops
-

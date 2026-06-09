@@ -175,7 +175,13 @@ TensorPtr clamp(const TensorPtr& tensor, float min_val, float max_val);
 TensorPtr create_causal_mask(int seq_len, DType dtype = kFloat32, Device device = kCPU);
 TensorPtr apply_mask(const TensorPtr& input, const TensorPtr& mask, float mask_value = -1e9f);
 TensorPtr repeat_kv_heads(const TensorPtr& kv, int repeat_factor);
-TensorPtr apply_rope(const TensorPtr& x, int seq_len, int head_dim, float rope_theta = 10000.0f);
+TensorPtr apply_rope(const TensorPtr& x, int seq_len, int head_dim,
+                     float rope_theta = 10000.0f,
+                     bool use_llama3_scaling = false,
+                     float rope_scaling_factor = 1.0f,
+                     float rope_low_freq_factor = 1.0f,
+                     float rope_high_freq_factor = 4.0f,
+                     int rope_original_max_position_embeddings = 0);
 TensorPtr swiglu(const TensorPtr& gate, const TensorPtr& up);
 
 bool same_shape(const TensorPtr& a, const TensorPtr& b);

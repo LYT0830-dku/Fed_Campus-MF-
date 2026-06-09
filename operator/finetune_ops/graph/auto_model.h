@@ -4,6 +4,7 @@
 #include "gemma_lora_injector.h"
 #include "gemma_model.h"
 #include "gpt2_model.h"
+#include "llama_model.h"
 #include "lora_injector.h"
 #include "model_registry.h"
 #include "qwen_model.h"
@@ -48,18 +49,24 @@ public:
 
     TensorPtr forward(const TensorPtr& input_ids,
                       const TensorPtr& attention_mask = nullptr);
+    TensorPtr forward_hidden(const TensorPtr& input_ids,
+                             const TensorPtr& attention_mask = nullptr);
+    TensorPtr lm_head_weight_for_loss() const;
 
     void init_lora(const AutoLoraConfig& config = AutoLoraConfig());
 
     std::vector<TensorPtr> parameters();
     std::vector<TensorPtr> trainable_parameters();
+    std::vector<std::pair<std::string, TensorPtr>> named_trainable_parameters();
 
     ModelFamily family() const { return spec_.family; }
     const ModelArchitectureSpec& spec() const { return spec_; }
     const std::string& model_dir() const { return model_dir_; }
+    const SafeTensorsLoadReport& safetensors_load_report() const { return safetensors_load_report_; }
 
     GPT2Model* gpt2() { return gpt2_.get(); }
     GemmaModel* gemma() { return gemma_.get(); }
+    LlamaModel* llama() { return llama_.get(); }
     QwenModel* qwen() { return qwen_.get(); }
 
 private:
@@ -72,10 +79,12 @@ private:
 
     std::unique_ptr<GPT2Model> gpt2_;
     std::unique_ptr<GemmaModel> gemma_;
+    std::unique_ptr<LlamaModel> llama_;
     std::unique_ptr<QwenModel> qwen_;
 
     std::unique_ptr<LoraInjector> gpt2_lora_;
     std::unique_ptr<GemmaLoraInjector> gemma_lora_;
+    SafeTensorsLoadReport safetensors_load_report_;
 };
 
 }  // namespace ops

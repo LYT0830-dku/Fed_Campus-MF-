@@ -134,7 +134,7 @@ void LoraInjector::inject(GPT2Model& model, const LoraSpec& spec) {
     std::cout << "[LoraInjector] Injected " << lora_count << " LoRA modules to " 
               << target_layers.size() << " layers" << std::endl;
     
-    // 打印LoRA信息
+    // Print LoRA injection details.
     int64_t total_params = 0;
     auto all_params = model.get_lora_parameters();
     for (const auto& p : all_params) {
@@ -158,7 +158,7 @@ void LoraInjector::inject_qkv_split(GPT2Model& model, int layer_idx,
     if (!W || !(*W)) throw std::runtime_error("attn_qkv_weight is null");
     if (!B || !(*B)) throw std::runtime_error("attn_qkv_bias is null");
 
-    // q/k/v 各一组（每组 [C, C]），在列维度上偏移 0, C, 2C
+    // One q/k/v slice each, offset by 0, C, and 2C along columns.
     const char* names[3] = {"q", "k", "v"};
     for (int idx = 0; idx < 3; ++idx) {
         Hook hook;

@@ -87,7 +87,7 @@ public:
         int64_t V = shape[2];
         int64_t S_eff = (S > 0) ? (S - 1) : 0;
         
-        // 创建梯度张量
+        // Create gradient tensor.
         auto grad_logits = zeros({B, S, V}, kFloat32, kCPU);
         float* grad_data = grad_logits->data<float>();
         const float* logits_data = logits_->data<float>();
@@ -114,13 +114,13 @@ public:
                 // Compute softmax at this position (numerically stable)
                 const float* logit_row = logits_data + (b * S + s) * V;
                 
-                // 找最大值
+                // Find the row maximum.
                 float max_val = -std::numeric_limits<float>::infinity();
                 for (int64_t v = 0; v < V; ++v) {
                     max_val = std::max(max_val, logit_row[v]);
                 }
                 
-                // 计算分母
+                // Compute the softmax denominator.
                 float denom = 0.0f;
                 for (int64_t v = 0; v < V; ++v) {
                     denom += std::exp(logit_row[v] - max_val);

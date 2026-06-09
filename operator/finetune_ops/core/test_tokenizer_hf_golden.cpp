@@ -20,7 +20,12 @@ struct GoldenCase {
     std::string model_dir;
     std::string case_name;
     std::string text;
+    bool add_special_tokens = false;
+    int max_length = 0;
     std::vector<int> expected_ids;
+    std::vector<int> expected_padded_ids;
+    std::vector<int> expected_attention_mask;
+    std::string expected_decode;
 };
 
 void require(bool condition, const std::string& message) {
@@ -134,6 +139,10 @@ size_t value_start_for_key(const std::string& line, const std::string& key) {
     return pos;
 }
 
+bool has_json_key(const std::string& line, const std::string& key) {
+    return line.find("\"" + key + "\"") != std::string::npos;
+}
+
 std::string json_string_field(const std::string& line, const std::string& key) {
     const size_t pos = value_start_for_key(line, key);
     return parse_json_string_at(line, pos);
@@ -168,6 +177,52 @@ std::vector<int> json_int_array_field(const std::string& line, const std::string
     throw std::runtime_error("unterminated array for key: " + key);
 }
 
+int json_int_field(const std::string& line, const std::string& key, int fallback) {
+    if (!has_json_key(line, key)) {
+        return fallback;
+    }
+    size_t pos = value_start_for_key(line, key);
+    const size_t start = pos;
+    if (pos < line.size() && line[pos] == '-') {
+        ++pos;
+    }
+    while (pos < line.size() && std::isdigit(static_cast<unsigned char>(line[pos]))) {
+        ++pos;
+    }
+    require(start != pos, "expected integer for key: " + key);
+    return std::stoi(line.substr(start, pos - start));
+}
+
+bool json_bool_field(const std::string& line, const std::string& key, bool fallback) {
+    if (!has_json_key(line, key)) {
+        return fallback;
+    }
+    size_t pos = value_start_for_key(line, key);
+    if (line.compare(pos, 4, "true") == 0) {
+        return true;
+    }
+    if (line.compare(pos, 5, "false") == 0) {
+        return false;
+    }
+    throw std::runtime_error("expected boolean for key: " + key);
+}
+
+std::vector<int> optional_json_int_array_field(const std::string& line,
+                                               const std::string& key) {
+    if (!has_json_key(line, key)) {
+        return {};
+    }
+    return json_int_array_field(line, key);
+}
+
+std::string optional_json_string_field(const std::string& line,
+                                       const std::string& key) {
+    if (!has_json_key(line, key)) {
+        return {};
+    }
+    return json_string_field(line, key);
+}
+
 GoldenCase parse_case(const std::string& line) {
     GoldenCase item;
     item.model_key = json_string_field(line, "model_key");
@@ -175,7 +230,12 @@ GoldenCase parse_case(const std::string& line) {
     item.model_dir = json_string_field(line, "model_dir");
     item.case_name = json_string_field(line, "case_name");
     item.text = json_string_field(line, "text");
+    item.add_special_tokens = json_bool_field(line, "add_special_tokens", false);
+    item.max_length = json_int_field(line, "max_length", 0);
     item.expected_ids = json_int_array_field(line, "expected_ids");
+    item.expected_padded_ids = optional_json_int_array_field(line, "expected_padded_ids");
+    item.expected_attention_mask = optional_json_int_array_field(line, "expected_attention_mask");
+    item.expected_decode = optional_json_string_field(line, "expected_decode");
     require(!item.model_dir.empty(), "golden fixture model_dir is empty");
     return item;
 }
@@ -217,6 +277,23 @@ void compare_case(const GoldenCase& item, const std::vector<int>& actual_ids) {
     throw std::runtime_error(message);
 }
 
+void compare_optional_array(const GoldenCase& item,
+                            const std::string& field,
+                            const std::vector<int>& expected,
+                            const std::vector<int>& actual) {
+    if (expected.empty()) {
+        return;
+    }
+    if (expected == actual) {
+        return;
+    }
+    throw std::runtime_error(
+        "HF tokenizer golden mismatch for " + item.model_key + "/" + item.case_name +
+        " field=" + field +
+        ": expected=" + preview_ids(expected) +
+        ", actual=" + preview_ids(actual));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -253,8 +330,28 @@ int main(int argc, char** argv) {
             it = tokenizers.emplace(item.model_dir, std::move(tokenizer)).first;
         }
 
-        const auto actual_ids = it->second->encode(item.text);
+        ops::TokenizerEncodeOptions options;
+        options.add_special_tokens = item.add_special_tokens;
+        options.truncation = true;
+        const auto actual_ids = it->second->encode_with_options(item.text, options);
         compare_case(item, actual_ids);
+
+        if (item.max_length > 0 &&
+            !item.expected_padded_ids.empty() &&
+            item.add_special_tokens == it->second->default_add_special_tokens()) {
+            auto encoded = it->second->encode_with_attention(item.text, item.max_length, true);
+            compare_optional_array(item, "expected_padded_ids", item.expected_padded_ids, encoded.input_ids);
+            compare_optional_array(item, "expected_attention_mask", item.expected_attention_mask, encoded.attention_mask);
+        }
+
+        if (!item.expected_decode.empty()) {
+            ops::TokenizerDecodeOptions decode_options;
+            decode_options.skip_special_tokens = true;
+            const auto decoded = it->second->decode_with_options(actual_ids, decode_options);
+            require(decoded == item.expected_decode,
+                    "HF tokenizer decode mismatch for " + item.model_key + "/" + item.case_name +
+                    ": expected=\"" + item.expected_decode + "\", actual=\"" + decoded + "\"");
+        }
         ++checked;
     }
 

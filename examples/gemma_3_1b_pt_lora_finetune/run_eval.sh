@@ -16,7 +16,7 @@ FEWSHOT="${FEWSHOT:-0}"   # commonly 5 for test
 # Use local C++ evaluation binary (Gemma)
 LOCAL_BIN="$SCRIPT_DIR/build/eval_mmlu_gemma"
 if [ ! -x "$LOCAL_BIN" ]; then
-  echo "[Build] 構建本地二進位..."
+  echo "[Build] Building local binary..."
   "$SCRIPT_DIR/build.sh"
 fi
 

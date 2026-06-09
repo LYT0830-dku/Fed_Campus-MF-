@@ -44,10 +44,10 @@ else
   MODEL_DIR="${MODEL_DIR:-$(mf_resolve_model_dir qwen "$SCRIPT_DIR/pretrained")}"
   DATA_DIR="${DATA_DIR:-$(mf_resolve_wikitext_dir "$REPO_ROOT")}"
   if [ ! -d "$MODEL_DIR" ]; then
-    echo "找不到模型目錄：$MODEL_DIR"; exit 1
+    echo "Model directory not found: $MODEL_DIR"; exit 1
   fi
   if [ ! -d "$DATA_DIR" ]; then
-    echo "找不到 WikiText-2 數據：$DATA_DIR"; exit 1
+    echo "WikiText-2 data directory not found: $DATA_DIR"; exit 1
   fi
 
   "$BIN" \

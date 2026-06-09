@@ -1,6 +1,6 @@
 /**
  * @file performance_monitor.cpp
- * @brief 性能与内存监控实现
+ * @brief Performance and memory monitoring implementation.
  */
 
 #include "performance_monitor.h"
@@ -87,4 +87,3 @@ void print_memory_optimization_tips(const MemorySnapshot& snapshot) {
 }
 
 } // namespace ops
-

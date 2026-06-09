@@ -1,6 +1,6 @@
 /**
  * @file arena_allocator.h
- * @brief 分区内存管理系统 - 根治物理足迹线性增长
+ * @brief Partitioned arena allocator for controlling physical memory growth.
  */
 
 #pragma once
@@ -163,5 +163,4 @@ public:
 
 } // namespace memory
 } // namespace ops
-
 

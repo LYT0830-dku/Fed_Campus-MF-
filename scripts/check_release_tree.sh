@@ -17,6 +17,8 @@ check_no_personal_paths() {
     scripts/asset_paths.py
     scripts/lib/asset_paths.sh
     scripts/check_local_assets.sh
+    scripts/check_tokenizer_hf_alignment.sh
+    scripts/check_peft_lora_step_fixture.sh
     scripts/run_training_smoke.sh
     scripts/run_training_real_assets.sh
     scripts/android/android_env.sh
@@ -128,6 +130,7 @@ check_package_files() {
     operator/cmake/OperatorsConfig.cmake.in
     operator/cmake/MobileFineTunerConfig.cmake.in
     operator/include/mobile_finetuner/mobile_finetuner.h
+    docs/GETTING_STARTED.md
     docs/MODEL_ASSETS.md
     docs/PUBLIC_API.md
   )
@@ -142,6 +145,75 @@ check_package_files() {
   done
   if [ "$missing" -eq 0 ]; then
     say "[OK]   Package config templates and asset docs exist"
+  fi
+}
+
+check_no_cjk_text_in_maintained_tree() {
+  local matches
+  matches="$(
+    cd "$ROOT" && python3 - <<'PY'
+import os
+from pathlib import Path
+
+roots = [
+    Path("README.md"),
+    Path("docs"),
+    Path("scripts"),
+    Path("android-visualizer/mft-sdk"),
+    Path("android-visualizer/sdk-sample"),
+    Path("operator"),
+    Path("examples"),
+]
+prune_names = {".git", ".gradle", ".cxx", "build", "build-android", "Rubbish", "runs", "review-stage"}
+binary_suffixes = {".zip", ".docx", ".png", ".jpg", ".jpeg", ".gif", ".pdf", ".a", ".o", ".so"}
+
+def has_han(text: str) -> bool:
+    for ch in text:
+        code = ord(ch)
+        if (
+            0x3400 <= code <= 0x4DBF
+            or 0x4E00 <= code <= 0x9FFF
+            or 0xF900 <= code <= 0xFAFF
+            or 0x20000 <= code <= 0x2A6DF
+            or 0x2A700 <= code <= 0x2B73F
+            or 0x2B740 <= code <= 0x2B81F
+            or 0x2B820 <= code <= 0x2CEAF
+            or 0x30000 <= code <= 0x3134F
+        ):
+            return True
+    return False
+
+def iter_files(root: Path):
+    if root.is_file():
+        yield root
+        return
+    if not root.exists():
+        return
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in prune_names]
+        for name in filenames:
+            path = Path(dirpath) / name
+            if path.suffix.lower() in binary_suffixes:
+                continue
+            yield path
+
+for root in roots:
+    for path in iter_files(root):
+        try:
+            data = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for line_no, line in enumerate(data.splitlines(), 1):
+            if has_han(line):
+                print(f"{path}:{line_no}:{line}")
+PY
+  )"
+  if [ -n "$matches" ]; then
+    say "[FAIL] CJK text found in maintained release files:"
+    say "$matches"
+    fail=1
+  else
+    say "[OK]   No CJK text in maintained release files"
   fi
 }
 
@@ -194,6 +266,8 @@ check_no_stale_operator_api() {
 check_shell_syntax() {
   local scripts=(
     scripts/check_local_assets.sh
+    scripts/check_lm_alignment_fixture.sh
+    scripts/check_peft_lora_step_fixture.sh
     scripts/run_training_smoke.sh
     scripts/run_training_real_assets.sh
     scripts/lib/asset_paths.sh
@@ -220,13 +294,31 @@ check_shell_syntax() {
   say "[OK]   Maintained shell entrypoints pass bash -n"
 }
 
+check_tokenizer_alignment_gate() {
+  if [ "${MFT_RUN_TOKENIZER_ALIGNMENT:-}" != "1" ] &&
+     [ -z "${MFT_MODEL_ROOT:-}" ] &&
+     [ -z "${MOBILEFINETUNER_MODEL_ROOT:-}" ]; then
+    say "[OK]   HF tokenizer alignment gate is available; set MFT_MODEL_ROOT to execute it"
+    return
+  fi
+
+  say "[INFO] Running HF tokenizer alignment gate"
+  if ! MFT_OPERATOR_BUILD_DIR="${MFT_OPERATOR_BUILD_DIR:-$ROOT/operator/build-release-audit}" \
+       bash "$ROOT/scripts/check_tokenizer_hf_alignment.sh"; then
+    say "[FAIL] HF tokenizer alignment gate failed"
+    fail=1
+  fi
+}
+
 check_no_personal_paths
 check_no_archived_experiment_surface
 check_large_source_files
 check_package_files
+check_no_cjk_text_in_maintained_tree
 check_no_generated_caches
 check_no_stale_operator_api
 check_shell_syntax
+check_tokenizer_alignment_gate
 
 if [ "$fail" -ne 0 ]; then
   exit 1

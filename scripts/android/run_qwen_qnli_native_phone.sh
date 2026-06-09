@@ -59,7 +59,7 @@ if [[ "$MEMORY_MONITOR" == "1" ]]; then
   LLVM_PREBUILT="$(mf_android_resolve_llvm_prebuilt "$NDK_ROOT")"
   CLANGXX="$LLVM_PREBUILT/bin/aarch64-linux-android29-clang++"
   if [[ ! -x "$CLANGXX" ]]; then
-    echo "找不到 Android clang++: $CLANGXX" >&2
+    echo "Android clang++ not found: $CLANGXX" >&2
     exit 1
   fi
   if [[ ! -x "$MONITOR_LOCAL" || "$MONITOR_SRC" -nt "$MONITOR_LOCAL" ]]; then

@@ -325,10 +325,14 @@ void LoRALinear::clear_lora() {
 
 std::vector<std::pair<std::string, TensorPtr>> LoRALinear::debug_params() const {
     std::vector<std::pair<std::string, TensorPtr>> result;
+    const bool multiple_slices = slices_.size() > 1;
     for (size_t i = 0; i < slices_.size(); ++i) {
         std::string prefix = debug_name_.empty() ? ("lora_" + std::to_string(i)) : debug_name_;
-        result.emplace_back(prefix + "_lora_A_default_weight", slices_[i].A);
-        result.emplace_back(prefix + "_lora_B_default_weight", slices_[i].B);
+        if (multiple_slices) {
+            prefix += ".slice_" + std::to_string(i);
+        }
+        result.emplace_back(prefix + ".lora_A.default.weight", slices_[i].A);
+        result.emplace_back(prefix + ".lora_B.default.weight", slices_[i].B);
     }
     return result;
 }
@@ -442,7 +446,7 @@ TensorPtr LoRALinear::forward(const TensorPtr& x) const {
             if (slice.cols == out_dim && slice.col0 == 0) {
                 y = add(y, delta);
             } else {
-                // 部分列更新
+                // Partial column update.
                 float* y_data = y->data<float>();
                 const float* delta_data = delta->data<float>();
                 auto y_shape = y->shape();

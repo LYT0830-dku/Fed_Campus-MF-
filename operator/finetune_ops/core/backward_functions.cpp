@@ -6,6 +6,51 @@
 
 namespace ops {
 
+namespace {
+
+float rope_inv_frequency(int64_t d,
+                         int64_t head_dim,
+                         float rope_theta,
+                         bool use_llama3_scaling,
+                         float rope_scaling_factor,
+                         float rope_low_freq_factor,
+                         float rope_high_freq_factor,
+                         int rope_original_max_position_embeddings) {
+    float inv_freq =
+        1.0f / std::pow(rope_theta,
+                        2.0f * static_cast<float>(d) / static_cast<float>(head_dim));
+    if (!use_llama3_scaling) {
+        return inv_freq;
+    }
+    if (rope_scaling_factor <= 0.0f ||
+        rope_low_freq_factor <= 0.0f ||
+        rope_high_freq_factor <= 0.0f ||
+        rope_original_max_position_embeddings <= 0 ||
+        rope_high_freq_factor <= rope_low_freq_factor) {
+        throw TensorError("ApplyRoPEBackward: invalid Llama3 rope_scaling parameters");
+    }
+
+    constexpr float two_pi = 6.2831853071795864769f;
+    const float wavelen = two_pi / inv_freq;
+    const float old_context = static_cast<float>(rope_original_max_position_embeddings);
+    const float low_freq_wavelen = old_context / rope_low_freq_factor;
+    const float high_freq_wavelen = old_context / rope_high_freq_factor;
+
+    if (wavelen < high_freq_wavelen) {
+        return inv_freq;
+    }
+    if (wavelen > low_freq_wavelen) {
+        return inv_freq / rope_scaling_factor;
+    }
+
+    const float smooth =
+        (old_context / wavelen - rope_low_freq_factor) /
+        (rope_high_freq_factor - rope_low_freq_factor);
+    return (1.0f - smooth) * inv_freq / rope_scaling_factor + smooth * inv_freq;
+}
+
+}  // namespace
+
 void accumulate_gradient(const TensorPtr& tensor, const TensorPtr& grad) {
     if (!tensor->requires_grad()) {
         return;
@@ -754,7 +799,13 @@ std::vector<TensorPtr> ApplyRoPEBackward::apply(const TensorPtr& grad_output) {
             for (int64_t pos = 0; pos < seq_len; ++pos) {
                 int64_t base = b * stride_batch + h * stride_head + pos * head_dim;
                 for (int64_t d = 0; d < half_dim; ++d) {
-                    float freq = 1.0f / std::pow(rope_theta_, 2.0f * static_cast<float>(d) / static_cast<float>(head_dim));
+                    const float freq =
+                        rope_inv_frequency(d, head_dim, rope_theta_,
+                                           use_llama3_scaling_,
+                                           rope_scaling_factor_,
+                                           rope_low_freq_factor_,
+                                           rope_high_freq_factor_,
+                                           rope_original_max_position_embeddings_);
                     float angle = static_cast<float>(pos) * freq;
                     float c = std::cos(angle);
                     float s = std::sin(angle);

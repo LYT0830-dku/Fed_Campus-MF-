@@ -66,7 +66,9 @@ public:
     /**
      * @brief Encode text into token IDs
      * @param text raw text
-     * @param add_special_tokens auto-append <|endoftext|> (default false)
+     * @param add_special_tokens follows HuggingFace GPT-2 semantics; this is
+     *        a no-op for the standard GPT-2 tokenizer because it has no
+     *        template-level BOS/EOS insertion.
      * @param max_length max length (0 = unlimited)
      * @param truncation whether to truncate when exceeding max_length
      * @return token IDs
@@ -139,6 +141,12 @@ private:
     std::vector<std::string> bpe(const std::string& token);         // BPE merge on a single token
     std::pair<int, int> get_best_pair(const std::vector<std::string>& word);  // best-ranked pair
     std::vector<std::string> split_to_words(const std::string& text);         // whitespace-based split
+
+    struct Segment {
+        std::string text;
+        bool is_special;
+    };
+    std::vector<Segment> split_by_special_tokens(const std::string& text);
 };
 
 /**
@@ -251,6 +259,112 @@ private:
     std::vector<std::string> split_to_words(const std::string& text);
 
     // Slice text by added_tokens (prevent BPE on added tokens)
+    struct Segment {
+        std::string text;
+        bool is_added;
+    };
+    std::vector<Segment> split_by_added_tokens(const std::string& text);
+};
+
+/**
+ * @brief Llama tokenizer.json-backed Byte-Level BPE configuration.
+ *
+ * Llama 3.x HuggingFace tokenizers store BPE vocab, merges, post-processor
+ * behavior, and added special tokens in tokenizer.json rather than separate
+ * vocab.json / merges.txt files. This adapter targets that layout directly.
+ */
+struct LlamaTokenizerConfig {
+    std::string tokenizer_json_path;
+    std::string tokenizer_config_json_path;
+    std::string special_tokens_map_path;
+    std::string config_json_path;
+
+    int eos_token_id = 128009;  // <|eot_id|> in common Llama 3.x instruct snapshots
+    int bos_token_id = 128000;  // <|begin_of_text|>
+    int pad_token_id = -1;      // often unset; falls back to eos or explicit pad token
+    int unk_token_id = -1;
+    int vocab_size_override = -1;
+
+    bool add_bos_token = true;
+    bool add_eos_token = false;
+    bool left_padding = false;
+
+    static LlamaTokenizerConfig from_pretrained(const std::string& model_dir) {
+        LlamaTokenizerConfig cfg;
+        cfg.tokenizer_json_path = model_dir + "/tokenizer.json";
+        cfg.tokenizer_config_json_path = model_dir + "/tokenizer_config.json";
+        cfg.special_tokens_map_path = model_dir + "/special_tokens_map.json";
+        cfg.config_json_path = model_dir + "/config.json";
+        return cfg;
+    }
+};
+
+class LlamaBPETokenizer {
+public:
+    explicit LlamaBPETokenizer(const LlamaTokenizerConfig& cfg);
+    ~LlamaBPETokenizer() = default;
+
+    void load();
+
+    std::vector<int> encode(const std::string& text,
+                            bool add_special_tokens = true,
+                            int max_length = 0,
+                            bool truncation = true);
+
+    std::string decode(const std::vector<int>& ids,
+                       bool skip_special_tokens = false);
+
+    std::pair<std::vector<std::vector<int>>, std::vector<std::vector<int>>>
+    batch_encode(const std::vector<std::string>& texts,
+                 int max_length = 0,
+                 const std::string& padding = "longest",
+                 bool truncation = true);
+
+    int get_eos_token_id() const { return eos_token_id_; }
+    int get_bos_token_id() const { return bos_token_id_; }
+    int get_pad_token_id() const { return pad_token_id_; }
+    int get_unk_token_id() const { return unk_token_id_; }
+    int get_vocab_size() const { return vocab_size_; }
+    bool left_padding() const { return left_padding_; }
+
+    std::string get_token_string(int token_id) const;
+
+private:
+    LlamaTokenizerConfig config_;
+
+    std::unordered_map<uint8_t, std::string> byte_encoder_;
+    std::unordered_map<std::string, uint8_t> byte_decoder_;
+
+    std::unordered_map<std::string, int> vocab_;
+    std::unordered_map<int, std::string> id_to_token_;
+    std::unordered_map<std::string, int> bpe_ranks_;
+
+    std::unordered_map<std::string, int> added_tokens_;
+    std::unordered_map<int, std::string> id_to_added_;
+    std::vector<std::string> added_tokens_sorted_;
+    std::unordered_map<std::string, bool> added_special_flags_;
+
+    int vocab_size_ = 0;
+    int eos_token_id_ = 128009;
+    int bos_token_id_ = 128000;
+    int pad_token_id_ = -1;
+    int unk_token_id_ = -1;
+    bool add_bos_token_ = true;
+    bool add_eos_token_ = false;
+    bool left_padding_ = false;
+
+    void build_byte_encoder();
+    void load_tokenizer_json();
+    void load_runtime_config();
+    void finalize_special_tokens();
+
+    std::string bytes_to_unicode(const std::string& text);
+    std::string unicode_to_bytes(const std::string& unicode_text);
+
+    std::vector<std::string> bpe(const std::string& token);
+    std::pair<int, int> get_best_pair(const std::vector<std::string>& word);
+    std::vector<std::string> split_to_words(const std::string& text);
+
     struct Segment {
         std::string text;
         bool is_added;
