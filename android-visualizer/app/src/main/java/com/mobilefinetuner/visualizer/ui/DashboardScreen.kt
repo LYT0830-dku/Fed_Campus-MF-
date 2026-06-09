@@ -195,15 +195,17 @@ fun DashboardScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                ControlBar(
-                    runs = ui.runHandles,
-                    selectedRunId = ui.selectedRunId,
-                    compareRunId = ui.compareRunId,
-                    onPickDirectory = { picker.launch(null) },
-                    onEnableDemo = viewModel::enableDemoMode,
-                    onSelectRun = viewModel::selectRun,
-                    onSelectCompareRun = viewModel::selectComparisonRun
-                )
+                if (ui.activeTab != DashboardTab.RUNNER) {
+                    ControlBar(
+                        runs = ui.runHandles,
+                        selectedRunId = ui.selectedRunId,
+                        compareRunId = ui.compareRunId,
+                        onPickDirectory = { picker.launch(null) },
+                        onEnableDemo = viewModel::enableDemoMode,
+                        onSelectRun = viewModel::selectRun,
+                        onSelectCompareRun = viewModel::selectComparisonRun
+                    )
+                }
 
                 TabRow(
                     selectedTabIndex = ui.activeTab.ordinal,
@@ -252,6 +254,7 @@ fun DashboardScreen(
                     }
                 ) { tab ->
                     when (tab) {
+                        DashboardTab.RUNNER -> RunnerScreen(runner = ui.runner, viewModel = viewModel)
                         DashboardTab.OVERVIEW -> OverviewTab(snapshot = ui.snapshot)
                         DashboardTab.TRAINING -> TrainingTab(snapshot = ui.snapshot)
                         DashboardTab.COMPARISON -> ComparisonTab(
@@ -1242,6 +1245,7 @@ private fun eventTypeColor(type: EventType): Color {
 
 private fun shortTabTitle(tab: DashboardTab): String {
     return when (tab) {
+        DashboardTab.RUNNER -> "Run"
         DashboardTab.OVERVIEW -> "Home"
         DashboardTab.TRAINING -> "Train"
         DashboardTab.COMPARISON -> "Versus"

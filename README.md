@@ -56,6 +56,7 @@ Unlike simulation-based or desktop-bound approaches, MobileFineTuner is built ar
 
 - [Installation & Build](#installation--build)
 - [Quick Start](#quick-start)
+- [Android Training App](#android-training-app)
 - [Android SDK / AAR](#android-sdk--aar)
 - [Model and Dataset Assets](#model-and-dataset-assets)
 - [Supported Models](#supported-models)
@@ -120,6 +121,21 @@ For a consumer-focused setup flow, start with
 
 The legacy package name is still available for existing consumers:
 `find_package(Operators REQUIRED)` and `Operators::operators`.
+
+### Android Training App
+
+MobileFineTuner includes a user-facing Android app for foreground on-device
+training:
+
+```bash
+cd android-visualizer
+./gradlew :app:assembleDebug
+```
+
+The app imports HuggingFace-style model directories into app-private storage,
+then runs native SDK training from the `Run` tab. See
+[docs/ANDROID_APP.md](docs/ANDROID_APP.md) for the app workflow and runtime
+asset behavior.
 
 ### Android SDK / AAR
 
