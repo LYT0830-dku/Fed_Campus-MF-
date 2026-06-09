@@ -13,7 +13,7 @@ fine-tuning and MMLU evaluation.
 
 ## Workflow
 
-1. Prepare JSONL training data with masked labels:
+1. Prepare task JSONL training data with answer-label masks:
 
    ```bash
    bash run_prepare_data.sh

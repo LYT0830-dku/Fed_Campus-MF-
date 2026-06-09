@@ -285,9 +285,8 @@ void WikiText2Dataset::reset_cursor() {
     cursor_ = 0;
 }
 
-bool WikiText2Dataset::parse_jsonl_ids_mask(const std::string& line,
-                                            std::vector<int32_t>& ids_out,
-                                            std::vector<uint8_t>& mask_out) {
+bool WikiText2Dataset::parse_jsonl_sample(const std::string& line,
+                                          JsonlSample& sample_out) {
     auto find_array = [](const std::string& s, const std::string& key, size_t from) -> std::pair<size_t,size_t> {
         size_t k = s.find("\"" + key + "\"", from);
         if (k == std::string::npos) return {std::string::npos, std::string::npos};
@@ -320,15 +319,26 @@ bool WikiText2Dataset::parse_jsonl_ids_mask(const std::string& line,
     if (ids_pos.first == std::string::npos) return false;
     auto mask_pos = find_array(line, "mask", ids_pos.second);
     if (mask_pos.first == std::string::npos) return false;
+    auto attention_pos = find_array(line, "attention_mask", mask_pos.second);
 
     auto ids_ll = parse_ints(line, ids_pos.first, ids_pos.second);
     auto mask_ll = parse_ints(line, mask_pos.first, mask_pos.second);
     if (ids_ll.empty() || mask_ll.empty() || ids_ll.size() != mask_ll.size()) return false;
-    ids_out.resize(ids_ll.size());
-    mask_out.resize(mask_ll.size());
+    sample_out.ids.resize(ids_ll.size());
+    sample_out.mask.resize(mask_ll.size());
     for (size_t i = 0; i < ids_ll.size(); ++i) {
-        ids_out[i] = static_cast<int32_t>(ids_ll[i]);
-        mask_out[i] = static_cast<uint8_t>(mask_ll[i] ? 1 : 0);
+        sample_out.ids[i] = static_cast<int32_t>(ids_ll[i]);
+        sample_out.mask[i] = static_cast<uint8_t>(mask_ll[i] ? 1 : 0);
+    }
+
+    sample_out.attention_mask.clear();
+    if (attention_pos.first != std::string::npos) {
+        auto attention_ll = parse_ints(line, attention_pos.first, attention_pos.second);
+        if (attention_ll.size() != ids_ll.size()) return false;
+        sample_out.attention_mask.resize(attention_ll.size());
+        for (size_t i = 0; i < attention_ll.size(); ++i) {
+            sample_out.attention_mask[i] = static_cast<uint8_t>(attention_ll[i] ? 1 : 0);
+        }
     }
     return true;
 }
@@ -347,19 +357,26 @@ void WikiText2Dataset::load_jsonl_split(Split split) {
     if (!in) throw std::runtime_error("Open JSONL failed: " + path);
     std::string line;
     while (std::getline(in, line)) {
-        std::vector<int32_t> ids;
-        std::vector<uint8_t> mask;
-        if (!parse_jsonl_ids_mask(line, ids, mask)) continue;
-        if (ids.size() > static_cast<size_t>(cfg_.seq_len)) {
-            ids.resize(static_cast<size_t>(cfg_.seq_len));
-            if (mask.size() > static_cast<size_t>(cfg_.seq_len)) mask.resize(static_cast<size_t>(cfg_.seq_len));
+        JsonlSample sample;
+        if (!parse_jsonl_sample(line, sample)) continue;
+        if (sample.ids.size() > static_cast<size_t>(cfg_.seq_len)) {
+            sample.ids.resize(static_cast<size_t>(cfg_.seq_len));
+            if (sample.mask.size() > static_cast<size_t>(cfg_.seq_len)) {
+                sample.mask.resize(static_cast<size_t>(cfg_.seq_len));
+            }
+            if (sample.attention_mask.size() > static_cast<size_t>(cfg_.seq_len)) {
+                sample.attention_mask.resize(static_cast<size_t>(cfg_.seq_len));
+            }
         }
-        if (ids.empty()) continue;
-        if (mask.size() != ids.size()) mask.assign(ids.size(), 0);
-        JsonlSample s;
-        s.ids = std::move(ids);
-        s.mask = std::move(mask);
-        jsonl_samples_.push_back(std::move(s));
+        if (sample.ids.empty()) continue;
+        if (sample.mask.size() != sample.ids.size()) {
+            sample.mask.assign(sample.ids.size(), 0);
+        }
+        if (!sample.attention_mask.empty() &&
+            sample.attention_mask.size() != sample.ids.size()) {
+            sample.attention_mask.clear();
+        }
+        jsonl_samples_.push_back(std::move(sample));
     }
 }
 Batch WikiText2Dataset::next_batch(size_t batch_size, bool need_loop) {
@@ -384,9 +401,7 @@ Batch WikiText2Dataset::next_batch(size_t batch_size, bool need_loop) {
         }
         std::fill(batch_input_buffer_.begin(), batch_input_buffer_.end(), static_cast<int32_t>(cfg_.pad_id));
         std::fill(batch_label_buffer_.begin(), batch_label_buffer_.end(), -100);
-        // Match the PyTorch JSONL/QNLI loader exactly: right-pad input_ids and labels,
-        // but keep attention_mask full-ones across the padded sequence.
-        std::fill(batch_attn_buffer_.begin(), batch_attn_buffer_.end(), 1.0f);
+        std::fill(batch_attn_buffer_.begin(), batch_attn_buffer_.end(), 0.0f);
 
         size_t start = cursor_;
         size_t end = std::min(cursor_ + batch_size, order_.size());
@@ -398,15 +413,27 @@ Batch WikiText2Dataset::next_batch(size_t batch_size, bool need_loop) {
             const auto& sample = jsonl_samples_[ord];
             const size_t L = std::min(static_cast<size_t>(S), sample.ids.size());
             for (size_t i = 0; i < L; ++i) {
-                int32_t tok = sample.ids[i];
-                uint8_t m = (i < sample.mask.size()) ? sample.mask[i] : 0;
+                const int32_t tok = sample.ids[i];
+                const uint8_t label_mask = (i < sample.mask.size()) ? sample.mask[i] : 0;
+                const uint8_t attention =
+                    sample.attention_mask.empty()
+                        ? 1
+                        : ((i < sample.attention_mask.size() && sample.attention_mask[i]) ? 1 : 0);
+                const uint8_t previous_attention =
+                    (i > 0)
+                        ? (sample.attention_mask.empty()
+                               ? 1
+                               : ((i - 1 < sample.attention_mask.size() && sample.attention_mask[i - 1]) ? 1 : 0))
+                        : 0;
                 batch_input_buffer_[b * S + i] = tok;
-                batch_attn_buffer_[b * S + i] = 1.0f;
-                batch_label_buffer_[b * S + i] = cfg_.jsonl_full_token_labels ? tok : (m ? tok : -100);
-            }
-            if (cfg_.jsonl_full_token_labels) {
-                for (size_t i = L; i < static_cast<size_t>(S); ++i) {
-                    batch_label_buffer_[b * S + i] = batch_input_buffer_[b * S + i];
+                batch_attn_buffer_[b * S + i] = attention ? 1.0f : 0.0f;
+
+                if (cfg_.jsonl_full_token_labels) {
+                    if (i > 0 && attention && previous_attention) {
+                        batch_label_buffer_[b * S + i] = tok;
+                    }
+                } else if (label_mask && attention) {
+                    batch_label_buffer_[b * S + i] = tok;
                 }
             }
         }
@@ -451,7 +478,7 @@ std::vector<int32_t> WikiText2Dataset::peek_tokens(size_t count) const {
 Batch WikiText2Dataset::get_batch(size_t index_start, size_t batch_size) const {
     const int S = cfg_.seq_len;
     
-    // 🚀 Reuse buffers (reduce allocations)
+    // Reuse buffers to avoid per-batch allocations.
     if (batch_input_buffer_.size() != batch_size * S) {
         batch_input_buffer_.resize(batch_size * S);
         batch_label_buffer_.resize(batch_size * S);
@@ -467,7 +494,7 @@ Batch WikiText2Dataset::get_batch(size_t index_start, size_t batch_size) const {
         const size_t ord = order_[index_start + b];
         const size_t global_start = starts_[ord];
         
-        // 🚀 Streaming mode: load window on demand
+        // Streaming mode: load window on demand.
         if (cfg_.streaming_mode) {
             // Ensure current chunk is inside cached window
             if (global_start < ids_global_offset_ || 
@@ -498,7 +525,7 @@ Batch WikiText2Dataset::get_batch(size_t index_start, size_t batch_size) const {
         }
     }
 
-    // 🚀 Reuse tensors (wrap with from_blob to avoid copies)
+    // Wrap reused buffers with from_blob to avoid copies.
     Batch batch;
     batch.input_ids = from_blob(
         batch_input_buffer_.data(), 

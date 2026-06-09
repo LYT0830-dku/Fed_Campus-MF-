@@ -171,6 +171,23 @@ The smoke test does not require external model weights. It creates a small
 temporary HuggingFace-style config in app-private storage, initializes LoRA, and
 executes one native `AutoTrainer` step.
 
+When real model assets are staged on the device, the same instrumentation suite
+can exercise the SDK open/init/train-text path for current families. Provide one
+or more model directories through instrumentation arguments:
+
+```bash
+cd android-visualizer
+./gradlew :mft-sdk:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.mft.gpt2.modelDir=/sdcard/MobileFineTuner/models/gpt2 \
+  -Pandroid.testInstrumentationRunnerArguments.mft.gemma.modelDir=/sdcard/MobileFineTuner/models/gemma-3-270m \
+  -Pandroid.testInstrumentationRunnerArguments.mft.qwen.modelDir=/sdcard/MobileFineTuner/models/Qwen2.5-0.5B
+```
+
+If no real model directory is supplied, the real-asset instrumentation case is
+skipped and the synthetic SDK smoke still runs. Add
+`.loadWeights=false` to any argument prefix when you only want to validate graph,
+tokenizer, LoRA, and JNI wiring without loading full SafeTensors weights.
+
 ## Sample App
 
 Build the standalone SDK sample app:

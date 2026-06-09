@@ -37,7 +37,7 @@ struct Args {
     bool qv_only = false; // default q/k/v/o, matching QwenModel and formal QNLI experiments
     bool shuffle_train = true;
     uint64_t seed = 42;
-    std::string loss_impl = "auto"; // auto: selected for masked JSONL, dense otherwise; full_dense/full_streaming: full-token JSONL labels
+    std::string loss_impl = "auto"; // auto: answer-mask JSONL, dense otherwise; full_dense/full_streaming: full-token JSONL labels
     bool align_mode = false; // alignment mode: single step with loss print
     bool synthetic_smoke = false;
     int smoke_steps = 2;
@@ -279,9 +279,9 @@ int main(int argc, char** argv) {
         }
         require_file(args.model_dir + "/config.json", "Qwen config");
         if (use_jsonl) {
-            require_file(args.jsonl_train, "masked JSONL train split");
+            require_file(args.jsonl_train, "task JSONL train split");
             if (!args.jsonl_valid.empty()) {
-                require_file(args.jsonl_valid, "masked JSONL valid split");
+                require_file(args.jsonl_valid, "task JSONL valid split");
             }
         } else {
             require_file(args.data_dir + "/wiki.train.raw", "WikiText-2 train split");
@@ -296,7 +296,7 @@ int main(int argc, char** argv) {
         metrics << "step,loss,step_time_s,elapsed_s\n";
 
         std::cout << "\n========== Qwen2.5-0.5B LoRA Finetune ("
-                  << (use_jsonl ? "masked JSONL" : "WikiText-2")
+                  << (use_jsonl ? "task JSONL" : "WikiText-2")
                   << ", C++) ==========\n";
         // 1) tokenizer
         auto tok_cfg = QwenTokenizerConfig::from_pretrained(args.model_dir);

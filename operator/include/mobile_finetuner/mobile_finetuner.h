@@ -13,6 +13,7 @@
 #include "finetune_ops/core/tensor.h"
 #include "finetune_ops/core/tokenizer.h"
 
+#include "finetune_ops/data/batch_provider.h"
 #include "finetune_ops/data/mmlu_dataset.h"
 #include "finetune_ops/data/causal_lm_batch.h"
 #include "finetune_ops/data/wikitext2_dataset.h"

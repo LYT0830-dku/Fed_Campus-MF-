@@ -59,6 +59,7 @@ Unlike simulation-based or desktop-bound approaches, MobileFineTuner is built ar
 - [Android SDK / AAR](#android-sdk--aar)
 - [Model and Dataset Assets](#model-and-dataset-assets)
 - [Supported Models](#supported-models)
+- [Current Family and Task Matrix](docs/CURRENT_FAMILY_TASK_MATRIX.md)
 - [Core Components](#core-components)
 - [Architecture](#architecture)
 - [Evaluation](#evaluation)
@@ -237,6 +238,17 @@ auto batch = ops::make_causal_lm_batch(*tokenizer, {"Example text."}, batch_cfg)
 auto step = trainer.train_step(batch);
 ```
 
+For a maintained multi-step loop, wrap an existing dataset in a provider and use
+`fit`:
+
+```cpp
+ops::WikiText2BatchProvider provider(dataset);
+ops::AutoFitConfig fit_cfg;
+fit_cfg.max_steps = 100;
+fit_cfg.batch_size = 4;
+auto summary = trainer.fit(provider, fit_cfg);
+```
+
 The lower-level GPT-2, Gemma, and Qwen graph classes remain available for
 alignment debugging and model-specific experiment runners.
 
@@ -281,7 +293,9 @@ alignment debugging and model-specific experiment runners.
 
 #### MMLU LoRA
 
-GPT-2 and Gemma consume masked JSONL prepared by `run_prepare_data.sh`. Qwen consumes the raw CSV tree under `data/mmlu/data` directly and does not use JSONL.
+GPT-2 and Gemma consume task JSONL prepared by `run_prepare_data.sh`, with
+answer-label masks for the multiple-choice objective. Qwen consumes the raw CSV
+tree under `data/mmlu/data` directly and does not use JSONL.
 
 - **GPT-2 Small / Medium:**
   ```bash
@@ -316,6 +330,28 @@ GPT-2 and Gemma consume masked JSONL prepared by `run_prepare_data.sh`. Qwen con
     MAX_STEPS=150 BATCH_SIZE=8 ./run_mmlu.sh
   )
   ```
+
+#### QNLI LoRA
+
+QNLI is prepared as standard causal-LM task JSONL:
+
+```json
+{"ids":[...], "mask":[...], "attention_mask":[...]}
+```
+
+`mask` selects answer tokens for answer-only supervision. Full-token CE ignores
+`mask` and supervises every real shifted token indicated by `attention_mask`.
+The maintained native Android path uses Qwen:
+
+```bash
+(
+  cd examples/qwen_lora_finetune &&
+  MAX_STEPS=3 BATCH_SIZE=8 SEQ_LEN=64 LOSS_IMPL=full_dense ./run_qnli.sh
+)
+```
+
+See [docs/CURRENT_FAMILY_TASK_MATRIX.md](docs/CURRENT_FAMILY_TASK_MATRIX.md) for
+the current family/task support boundary.
 
 #### GPT-2 Small Full Fine-Tune (WikiText-2)
 ```bash
@@ -406,7 +442,7 @@ MobileFineTuner follows the same high-level split used by PyTorch/Transformers:
 - `AutoModelForCausalLM::from_pretrained(model_dir)` constructs the supported
   GPT-2, Gemma, Qwen, or validated experimental Llama graph and loads SafeTensors with
   correct layout defaults.
-- `AutoTrainer` provides a shared one-step causal-LM LoRA training core.
+- `AutoTrainer` provides shared causal-LM LoRA `train_step` and `fit` loops.
 - model graph classes under `finetune_ops/graph/` implement the architecture
   math and HuggingFace weight-name mapping.
 - LoRA injection is defined by target module names, not by application

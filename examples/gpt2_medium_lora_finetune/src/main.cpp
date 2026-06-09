@@ -31,7 +31,7 @@ struct CmdArgs {
     string lora_out;
     string resume_from;
     string eval_out;
-    // Optional: masked JSONL inputs for supervised LM (ids/mask)
+    // Optional task JSONL inputs for supervised LM (ids/mask/attention_mask)
     string jsonl_train;
     string jsonl_valid;
     string jsonl_test;
@@ -65,9 +65,9 @@ static void print_usage(const char* prog) {
          << "Options:\n"
          << "  --data_dir PATH          Data directory (WikiText-2 raw)\n"
          << "  --pretrained_dir PATH    Pretrained model directory\n"
-         << "  --jsonl_train PATH       JSONL train (optional; contains ids/mask)\n"
-         << "  --jsonl_valid PATH       JSONL valid (optional; contains ids/mask)\n"
-         << "  --jsonl_test PATH        JSONL test  (optional; contains ids/mask)\n"
+         << "  --jsonl_train PATH       JSONL train (optional; contains ids/mask/attention_mask)\n"
+         << "  --jsonl_valid PATH       JSONL valid (optional; contains ids/mask/attention_mask)\n"
+         << "  --jsonl_test PATH        JSONL test  (optional; contains ids/mask/attention_mask)\n"
          << "  --lora_out PATH          Output path for LoRA adapter\n"
          << "  --resume_from PATH       Resume from LoRA checkpoint\n"
          << "  --eval_out PATH          Write eval metrics to JSONL\n"

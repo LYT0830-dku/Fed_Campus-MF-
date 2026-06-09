@@ -21,7 +21,16 @@ struct WT2Config {
     std::string train_path;
     std::string valid_path;
     std::string test_path;
-    // Optional: JSONL pretokenized causal LM data with masks: {"ids":[...], "mask":[...]}
+    // Optional: JSONL pretokenized causal LM data.
+    //
+    // Standard record:
+    //   {"ids":[...], "mask":[...], "attention_mask":[...]}
+    //
+    // `mask` is a label-selection mask for answer-only objectives. In
+    // jsonl_full_token_labels mode it is ignored and the dataset builds the
+    // standard shifted full-token causal-LM labels from attention_mask. Older
+    // records without attention_mask are accepted; positions present in `ids`
+    // are treated as real tokens and dataset-added right padding is ignored.
     // If any jsonl_* provided, JSONL mode is used (raw/pretokenized ignored)
     std::string jsonl_train;
     std::string jsonl_valid;
@@ -37,7 +46,7 @@ struct WT2Config {
     bool drop_last = true;     // train=true; valid can set false to keep tail
     uint64_t seed = 2025;      // RNG seed for shuffling/sampling
     bool shuffle_train = true; // shuffle training order
-    bool jsonl_full_token_labels = false; // JSONL mode: supervise every shifted token instead of mask-only labels
+    bool jsonl_full_token_labels = false; // JSONL mode: supervise every real shifted token instead of mask-only labels
     
     // Streaming load (memory friendly)
     bool streaming_mode = true;       // stream tokens instead of loading all
@@ -135,11 +144,16 @@ private:
     void ensure_pretokenized_meta_loaded();
     void load_pretokenized_split(Split split);
     
-    // JSONL mode: each line is {"ids":[...], "mask":[...]} (length <= seq_len)
+    struct JsonlSample {
+        std::vector<int32_t> ids;
+        std::vector<uint8_t> mask;           // label-selection mask
+        std::vector<uint8_t> attention_mask; // real-token mask; empty means all ids are real
+    };
+
+    // JSONL mode: each line is {"ids":[...], "mask":[...], "attention_mask":[...]}.
     void load_jsonl_split(Split split);
-    static bool parse_jsonl_ids_mask(const std::string& line,
-                                     std::vector<int32_t>& ids_out,
-                                     std::vector<uint8_t>& mask_out);
+    static bool parse_jsonl_sample(const std::string& line,
+                                   JsonlSample& sample_out);
 
     WT2Config cfg_;
     GPT2BPETokenizer* tok_ [[maybe_unused]];   // non-owning pointer
@@ -168,12 +182,8 @@ private:
     mutable PretokenizedMeta pretokenized_meta_;
     bool pretokenized_mode_ = false;
     
-    // JSONL mask mode
+    // JSONL task mode
     bool jsonl_mode_ = false;
-    struct JsonlSample {
-        std::vector<int32_t> ids;
-        std::vector<uint8_t> mask;
-    };
     std::vector<JsonlSample> jsonl_samples_;
 };
 

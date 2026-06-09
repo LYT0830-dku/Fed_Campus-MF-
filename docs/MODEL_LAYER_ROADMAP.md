@@ -65,7 +65,8 @@ Required work:
   **Done for a local Llama 3.2-1B-Instruct snapshot.**
 - Add Llama3 RoPE scaling. **Done for `rope_type=llama3`; unsupported scaling
   variants still fail explicitly.**
-- Add LoRA optimizer-step parity against PEFT. **Pending.**
+- Add LoRA optimizer-step parity against PEFT. **Done for the local
+  Llama 3.2-1B-Instruct fixture.**
 - Add Android real-weight smoke. **Pending.**
 
 Main risks:
@@ -238,6 +239,11 @@ On Android:
 
 The Android gate can use a small checkpoint or a reduced fixture when full
 weights are too large for routine CI.
+
+The maintained family/task boundary is tracked in
+`docs/CURRENT_FAMILY_TASK_MATRIX.md`. A dataset row is not considered promoted
+until its JSONL or raw loader produces the same `input_ids`, `attention_mask`,
+and shifted-label contract used by the PyTorch alignment fixtures.
 
 ## Current Real-Asset Alignment Results
 

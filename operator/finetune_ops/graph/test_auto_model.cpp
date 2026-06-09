@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -82,6 +83,37 @@ void require_named_trainables_are_stable(ops::AutoModelForCausalLM& model,
             "named trainable parameters missing expected fragment: " + expected_name_fragment);
 }
 
+class FixedBatchProvider final : public ops::BatchProvider {
+public:
+    explicit FixedBatchProvider(std::vector<ops::CausalLMBatch> batches)
+        : batches_(std::move(batches)) {}
+
+    ops::CausalLMBatch next_batch(std::size_t, bool loop) override {
+        if (batches_.empty()) {
+            return ops::CausalLMBatch{};
+        }
+        if (cursor_ >= batches_.size()) {
+            if (!loop) {
+                return ops::CausalLMBatch{};
+            }
+            cursor_ = 0;
+        }
+        return batches_[cursor_++];
+    }
+
+    void reset() override {
+        cursor_ = 0;
+    }
+
+    std::size_t num_sequences() const override {
+        return batches_.size();
+    }
+
+private:
+    std::vector<ops::CausalLMBatch> batches_;
+    std::size_t cursor_ = 0;
+};
+
 void test_gpt2_auto_trainer_step() {
     const fs::path root = make_case_dir("gpt2");
     write_file(root / "config.json",
@@ -121,6 +153,27 @@ void test_gpt2_auto_trainer_step() {
     const auto batch_result = trainer.train_step(batch);
     require(std::isfinite(batch_result.loss), "GPT-2 AutoTrainer batch loss is not finite");
     require(batch_result.valid_label_count == 2, "GPT-2 batch valid label count mismatch");
+
+    FixedBatchProvider provider({
+        ops::make_causal_lm_batch_from_token_ids({{1, 2, 3}}, 0, batch_cfg),
+        ops::make_causal_lm_batch_from_token_ids({{2, 3, 4}}, 0, batch_cfg),
+    });
+    ops::AutoFitConfig fit_cfg;
+    fit_cfg.max_steps = 2;
+    fit_cfg.batch_size = 1;
+    fit_cfg.loop_dataset = false;
+    int callbacks = 0;
+    const auto fit_result = trainer.fit(provider, fit_cfg, [&](const ops::AutoFitStep& step) {
+        ++callbacks;
+        require(step.step == callbacks, "AutoTrainer fit callback step mismatch");
+        require(std::isfinite(step.train_result.loss), "AutoTrainer fit callback loss is not finite");
+    });
+    require(fit_result.completed_steps == 2, "AutoTrainer fit completed step count mismatch");
+    require(!fit_result.stopped_early, "AutoTrainer fit stopped early unexpectedly");
+    require(callbacks == 2, "AutoTrainer fit callback count mismatch");
+    require(fit_result.total_valid_label_count == 4, "AutoTrainer fit valid label count mismatch");
+    require(std::isfinite(fit_result.final_loss), "AutoTrainer fit final loss is not finite");
+    require(std::isfinite(fit_result.mean_loss), "AutoTrainer fit mean loss is not finite");
 }
 
 void test_gpt2_lora_target_policy() {

@@ -1,11 +1,14 @@
 package com.mobilefinetuner.sdk;
 
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 
 import android.content.Context;
+import android.os.Bundle;
 
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -60,6 +63,38 @@ public final class MobileFineTunerDeviceSmokeTest {
             assertTrue(result.trainableTensorCount > 0);
             assertTrue(result.validLabelCount > 0);
         }
+    }
+
+    @Test
+    public void optionalRealAssetTextBatchSmoke() {
+        Bundle args = InstrumentationRegistry.getArguments();
+        int executed = 0;
+        executed += runRealAssetCaseIfConfigured(args, "mft.gpt2.modelDir", "GPT-2");
+        executed += runRealAssetCaseIfConfigured(args, "mft.gemma.modelDir", "Gemma");
+        executed += runRealAssetCaseIfConfigured(args, "mft.qwen.modelDir", "Qwen");
+        assumeTrue("No real model asset directories were provided for optional SDK smoke", executed > 0);
+    }
+
+    private static int runRealAssetCaseIfConfigured(Bundle args, String key, String familyName) {
+        String modelDir = args.getString(key, "");
+        if (modelDir == null || modelDir.isEmpty()) {
+            return 0;
+        }
+        File dir = new File(modelDir);
+        assertTrue(familyName + " modelDir does not exist: " + modelDir, dir.isDirectory());
+
+        boolean loadWeights = Boolean.parseBoolean(args.getString(key + ".loadWeights", "true"));
+        int sequenceLength = Integer.parseInt(args.getString(key + ".sequenceLength", "8"));
+        try (MobileFineTuner mf = MobileFineTuner.open(modelDir, loadWeights)) {
+            mf.initLora(MobileFineTuner.LoraConfig.attentionQkvo());
+            mf.createTrainer(new MobileFineTuner.TrainerConfig(2e-4f, 0.0f, 1.0f, -100));
+            MobileFineTuner.TrainStepResult result =
+                    mf.trainTextBatch(new String[]{"MobileFineTuner real asset smoke."}, sequenceLength, true);
+            assertTrue(familyName + " loss is not finite", Float.isFinite(result.loss));
+            assertTrue(familyName + " trainable tensor count is empty", result.trainableTensorCount > 0);
+            assertTrue(familyName + " valid label count is empty", result.validLabelCount > 0);
+        }
+        return 1;
     }
 
     private static void writeFile(File file, String content) throws IOException {

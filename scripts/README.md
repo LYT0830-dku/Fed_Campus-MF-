@@ -236,6 +236,14 @@ Outputs:
 
 The dataset converters produce local JSONL artifacts under ignored output
 directories. They do not download or bundle benchmark data into the source tree.
+Each record follows the maintained task schema:
+
+```json
+{"ids":[...], "mask":[...], "attention_mask":[...]}
+```
+
+`mask` selects answer tokens for answer-only objectives; full-token causal-LM
+training uses `attention_mask` and ignores `mask`.
 
 ```bash
 python3 scripts/prepare_qnli_jsonl.py --help

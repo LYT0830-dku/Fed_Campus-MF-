@@ -125,6 +125,7 @@ set(FINETUNE_SOURCES
     finetune_ops/graph/qwen_model.cpp
     finetune_ops/data/mmlu_dataset.cpp
     finetune_ops/data/causal_lm_batch.cpp
+    finetune_ops/data/batch_provider.cpp
     
     # Stage B: data loading and training
     finetune_ops/data/wikitext2_dataset.cpp

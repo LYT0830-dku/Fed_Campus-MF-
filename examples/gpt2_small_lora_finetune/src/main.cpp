@@ -31,7 +31,7 @@ struct CmdArgs {
     string lora_out;
     string resume_from;
     string eval_out;
-    // Optional: masked JSONL inputs for supervised LM (ids/mask)
+    // Optional task JSONL inputs for supervised LM (ids/mask/attention_mask)
     string jsonl_train;
     string jsonl_valid;
     string jsonl_test;
@@ -65,9 +65,9 @@ static void print_usage(const char* prog) {
          << "Options:\n"
          << "  --data_dir PATH          Data directory (WikiText-2 raw)\n"
          << "  --pretrained_dir PATH    Pretrained model directory\n"
-         << "  --jsonl_train PATH       JSONL train (optional; contains ids/mask)\n"
-         << "  --jsonl_valid PATH       JSONL valid (optional; contains ids/mask)\n"
-         << "  --jsonl_test PATH        JSONL test  (optional; contains ids/mask)\n"
+         << "  --jsonl_train PATH       JSONL train (optional; contains ids/mask/attention_mask)\n"
+         << "  --jsonl_valid PATH       JSONL valid (optional; contains ids/mask/attention_mask)\n"
+         << "  --jsonl_test PATH        JSONL test  (optional; contains ids/mask/attention_mask)\n"
          << "  --lora_out PATH          Output path for LoRA adapter\n"
          << "  --resume_from PATH       Resume from LoRA checkpoint\n"
          << "  --eval_out PATH          Write eval metrics to JSONL\n"
@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
 #else
         cout << "  BLAS          : OFF (compiled)" << endl;
 #endif
-        // Data source: prefer masked JSONL (MMLU-style samples); otherwise fall back to raw text under data_dir
+        // Data source: prefer task JSONL (MMLU-style samples); otherwise fall back to raw text under data_dir
         if (!args.jsonl_train.empty() || !args.jsonl_valid.empty() || !args.jsonl_test.empty()) {
             cout << "  data_source    : JSONL (masked Causal LM)" << endl;
             if (!args.jsonl_train.empty()) cout << "  jsonl_train    : " << args.jsonl_train << endl;
@@ -403,7 +403,7 @@ int main(int argc, char** argv) {
         tokenizer.load();
 
         WT2Config data_cfg;
-        // Prefer JSONL when provided (masked labels applied only on answer spans)
+            // Prefer JSONL when provided (mask labels apply only on answer spans).
         if (!args.jsonl_train.empty() || !args.jsonl_valid.empty() || !args.jsonl_test.empty()) {
             data_cfg.jsonl_train = args.jsonl_train;
             data_cfg.jsonl_valid = args.jsonl_valid;

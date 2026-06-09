@@ -53,6 +53,29 @@ auto batch = ops::make_causal_lm_batch(*tokenizer, {"A training sentence."}, bat
 auto result = trainer.train_step(batch);
 ```
 
+For multi-step local training, feed batches through the `BatchProvider` surface:
+
+```cpp
+ops::WT2Config data_cfg;
+data_cfg.train_path = wt2_dir + "/wiki.train.raw";
+data_cfg.valid_path = wt2_dir + "/wiki.valid.raw";
+data_cfg.seq_len = 64;
+
+ops::WikiText2Dataset dataset(
+    data_cfg,
+    [&](const std::string& text) {
+        auto ids = tokenizer->encode(text);
+        return std::vector<int32_t>(ids.begin(), ids.end());
+    });
+dataset.load(ops::Split::Train);
+
+ops::WikiText2BatchProvider provider(dataset);
+ops::AutoFitConfig fit_cfg;
+fit_cfg.max_steps = 100;
+fit_cfg.batch_size = 4;
+auto fit = trainer.fit(provider, fit_cfg);
+```
+
 `ModelRegistry` is the C++ equivalent of a small `AutoConfig` layer: it reads
 `config.json`, identifies the supported model family, records tokenizer and
 SafeTensors asset paths, and exposes default LoRA target names.
@@ -67,11 +90,13 @@ and graph gates pass.
 `AutoModelForCausalLM` is the matching model dispatcher. It constructs the
 concrete graph class, loads SafeTensors with family-correct transpose defaults,
 exposes one `forward(input_ids, attention_mask)` call, initializes LoRA, and
-returns trainable parameters. `AutoTrainer` provides the shared one-step LoRA
-training core: forward, full-token shifted LM cross entropy, backward, gradient
-clipping, Adam update, and zero-grad. By default it computes the same dense
-causal-LM objective through `streaming_lm_cross_entropy`, avoiding materializing
-the `[batch, sequence, vocab]` logits tensor on mobile devices. Set
+returns trainable parameters. `AutoTrainer` provides the shared LoRA training
+core: forward, full-token shifted LM cross entropy, backward, gradient clipping,
+Adam update, and zero-grad. Use `train_step(...)` for one-step control or
+`fit(BatchProvider&, AutoFitConfig, callback)` for a maintained multi-step loop.
+By default it computes the same dense causal-LM objective through
+`streaming_lm_cross_entropy`, avoiding materializing the
+`[batch, sequence, vocab]` logits tensor on mobile devices. Set
 `AutoTrainerConfig::use_streaming_lm_loss = false` only when debugging against a
 dense-logits reference path.
 
@@ -101,6 +126,18 @@ logits[:, :-1, :] vs labels[:, 1:]
 gets one explicit EOS token before truncation and padding. Tokenizers do not
 silently append EOS for GPT-2/Qwen; the training data policy lives in the batch
 builder.
+
+Prepared task JSONL files use the same tensor contract:
+
+```json
+{"ids":[...], "mask":[...], "attention_mask":[...]}
+```
+
+`attention_mask` marks real tokens. `mask` is only a label-selection mask for
+answer-only objectives such as multiple-choice or QNLI answer-token training.
+When a JSONL dataset is loaded with full-token labels enabled, `mask` is ignored
+and every real shifted token from `attention_mask` is supervised. Padding
+positions remain `ignore_index`.
 
 The current Auto APIs cover the shared causal-LM/LoRA training core. Specialized
 dataset loops, logging, checkpoint schedules, and model-specific diagnostics can

@@ -13,7 +13,7 @@ LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Prepare masked JSONL for multiple-choice tasks.")
+    p = argparse.ArgumentParser(description="Prepare task JSONL for multiple-choice tasks.")
     p.add_argument("--task", required=True, choices=["arcc", "arce", "hellaswag", "piqa", "mmlu"])
     p.add_argument("--model_dir", required=True)
     p.add_argument("--out_dir", required=True)
@@ -161,11 +161,13 @@ def build_record(tokenizer, prompt: str, answer_letter: str, seq_len: int, eos_i
     if len(ids) > seq_len:
         return None
     mask = [0] * len(prompt_ids) + [1] * len(answer_ids) + [0]
+    attention_mask = [1] * len(ids)
     pad = seq_len - len(ids)
     if pad:
         ids.extend([eos_id] * pad)
         mask.extend([0] * pad)
-    return {"ids": ids, "mask": mask}
+        attention_mask.extend([0] * pad)
+    return {"ids": ids, "mask": mask, "attention_mask": attention_mask}
 
 
 def load_split(spec, hf_split):
@@ -218,6 +220,12 @@ def main():
         "task": args.task,
         "dataset": spec["dataset"],
         "config": spec["config"],
+        "format": "causal_lm_task_jsonl",
+        "schema": {
+            "ids": "input token ids",
+            "mask": "answer-only label mask; ignored by full-token CE",
+            "attention_mask": "real-token mask; padding is ignored by loss and attention",
+        },
         "model_dir": str(Path(args.model_dir).resolve()),
         "seq_len": args.seq_len,
         "eos_id": int(eos_id),

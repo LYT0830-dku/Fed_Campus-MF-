@@ -1,10 +1,13 @@
 #pragma once
 
 #include "../core/tensor.h"
+#include "../data/batch_provider.h"
 #include "../data/causal_lm_batch.h"
 #include "../graph/auto_model.h"
 #include "adam.h"
 
+#include <cstddef>
+#include <functional>
 #include <memory>
 
 namespace ops {
@@ -23,6 +26,28 @@ struct AutoTrainStepResult {
     int valid_label_count = 0;
 };
 
+struct AutoFitConfig {
+    int max_steps = 1;
+    std::size_t batch_size = 1;
+    bool loop_dataset = true;
+};
+
+struct AutoFitStep {
+    int step = 0;
+    AutoTrainStepResult train_result;
+};
+
+struct AutoFitResult {
+    int completed_steps = 0;
+    bool stopped_early = false;
+    float final_loss = 0.0f;
+    float mean_loss = 0.0f;
+    int trainable_tensor_count = 0;
+    int total_valid_label_count = 0;
+};
+
+using AutoFitStepCallback = std::function<void(const AutoFitStep&)>;
+
 class AutoTrainer {
 public:
     AutoTrainer(AutoModelForCausalLM& model,
@@ -33,6 +58,10 @@ public:
                                    const TensorPtr& labels);
 
     AutoTrainStepResult train_step(const CausalLMBatch& batch);
+
+    AutoFitResult fit(BatchProvider& provider,
+                      const AutoFitConfig& fit_config,
+                      AutoFitStepCallback on_step = nullptr);
 
 private:
     AutoModelForCausalLM& model_;

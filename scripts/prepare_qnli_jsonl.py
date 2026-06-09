@@ -133,7 +133,8 @@ def build_record(
         return None, truncated
 
     mask = [0] * len(prompt_ids) + [1] * len(answer_ids) + [0]
-    return {"ids": ids, "mask": mask}, truncated
+    attention_mask = [1] * len(ids)
+    return {"ids": ids, "mask": mask, "attention_mask": attention_mask}, truncated
 
 
 def iter_tsv_rows(path: Path) -> Iterable[dict]:
@@ -222,7 +223,12 @@ def main() -> None:
 
     meta = {
         "task": "qnli",
-        "format": "masked_jsonl",
+        "format": "causal_lm_task_jsonl",
+        "schema": {
+            "ids": "input token ids",
+            "mask": "answer-only label mask; ignored by full-token CE",
+            "attention_mask": "real-token mask; padding is ignored by loss and attention",
+        },
         "label_texts": {"entailment": "yes", "not_entailment": "no"},
         "prompt_template": (
             "Task: Determine whether the sentence contains the answer to the question.\\n"

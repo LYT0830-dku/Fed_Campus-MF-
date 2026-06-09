@@ -11,7 +11,7 @@ LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Prepare ARC-Challenge masked JSONL for MF.")
+    p = argparse.ArgumentParser(description="Prepare ARC-Challenge task JSONL for MF.")
     p.add_argument("--model_dir", required=True)
     p.add_argument("--out_dir", required=True)
     p.add_argument("--seq_len", type=int, default=128)
@@ -63,11 +63,13 @@ def build_record(tokenizer, ex, seq_len, eos_id):
     if len(ids) > seq_len:
         return None
     mask = [0] * len(prompt_ids) + [1] * len(answer_ids) + [0]
+    attention_mask = [1] * len(ids)
     pad = seq_len - len(ids)
     if pad:
         ids.extend([eos_id] * pad)
         mask.extend([0] * pad)
-    return {"ids": ids, "mask": mask}
+        attention_mask.extend([0] * pad)
+    return {"ids": ids, "mask": mask, "attention_mask": attention_mask}
 
 
 def write_split(tokenizer, dataset_split, out_path, seq_len, eos_id):
@@ -113,6 +115,12 @@ def main():
     manifest = {
         "dataset": "allenai/ai2_arc",
         "config": args.dataset_config,
+        "format": "causal_lm_task_jsonl",
+        "schema": {
+            "ids": "input token ids",
+            "mask": "answer-only label mask; ignored by full-token CE",
+            "attention_mask": "real-token mask; padding is ignored by loss and attention",
+        },
         "model_dir": str(Path(args.model_dir).resolve()),
         "seq_len": args.seq_len,
         "eos_id": int(eos_id),

@@ -101,6 +101,17 @@ token after padding so a padding-position query is not supervised to predict a
 real token. `scripts/generate_lm_alignment_fixture.py` uses the same label
 policy before asking PyTorch for the reference loss.
 
+Prepared task JSONL follows a separate but compatible contract:
+
+```json
+{"ids":[...], "mask":[...], "attention_mask":[...]}
+```
+
+`attention_mask` marks real tokens and is always used by model forward passes.
+`mask` marks answer tokens for answer-only objectives. Full-token JSONL training
+ignores `mask` and constructs labels from every real shifted token, with padding
+positions left at `-100`.
+
 ## Model Graph Layer
 
 Each supported architecture has a graph class under `operator/finetune_ops/graph`:
@@ -134,8 +145,9 @@ initialize LoRA, run forward, and expose trainable parameters. Mistral is
 recognized but rejected at this layer until graph gates pass. It also retains a
 structured `SafeTensorsLoadReport` for the most recent weight load, including
 loaded keys, missing keys, source shard paths, dtype/shape metadata, and
-unmapped checkpoint tensors. `AutoTrainer` sits one layer above it and
-implements the shared one-step training core:
+unmapped checkpoint tensors. `BatchProvider` adapts dataset loaders to the
+standard `CausalLMBatch` contract, and `AutoTrainer` sits one layer above the
+model graph to implement the shared training core:
 
 ```text
 input_ids + attention_mask + labels
@@ -147,10 +159,12 @@ AutoModelForCausalLM::forward
 lm_cross_entropy -> backward -> grad clip -> Adam -> zero_grad
 ```
 
-Application code can pass either raw tensors or `CausalLMBatch` directly:
+Application code can pass raw tensors, a `CausalLMBatch`, or a `BatchProvider`
+for a maintained multi-step loop:
 
 ```cpp
 auto result = trainer.train_step(batch);
+auto summary = trainer.fit(provider, fit_cfg);
 ```
 
 ## Tokenizer Extension Contract

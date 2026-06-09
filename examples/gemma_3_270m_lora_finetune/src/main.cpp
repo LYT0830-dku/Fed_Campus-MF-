@@ -457,7 +457,7 @@ int main(int argc, char** argv) {
                 std::cout << "[INFO] pretokenized_meta=" << cli.pretokenized_meta << std::endl;
             }
         } else if (!cli.jsonl_train.empty() || !cli.jsonl_valid.empty() || !cli.jsonl_test.empty()) {
-            std::cout << "[INFO] data_source=JSONL(masked)" << std::endl;
+            std::cout << "[INFO] data_source=task JSONL(answer-mask)" << std::endl;
             if (!cli.jsonl_train.empty()) std::cout << "[INFO] jsonl_train=" << cli.jsonl_train << std::endl;
             if (!cli.jsonl_valid.empty()) std::cout << "[INFO] jsonl_valid=" << cli.jsonl_valid << std::endl;
             if (!cli.jsonl_test.empty())  std::cout << "[INFO] jsonl_test="  << cli.jsonl_test  << std::endl;

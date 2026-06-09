@@ -11,14 +11,19 @@ say() {
 
 check_no_personal_paths() {
   local files=(
-    README.md
-    docs/MODEL_ASSETS.md
+	    README.md
+	    docs/ANDROID_SDK.md
+	    docs/CURRENT_FAMILY_TASK_MATRIX.md
+	    docs/MODEL_ASSETS.md
     scripts/README.md
     scripts/asset_paths.py
     scripts/lib/asset_paths.sh
     scripts/check_local_assets.sh
-    scripts/check_tokenizer_hf_alignment.sh
-    scripts/check_peft_lora_step_fixture.sh
+	    scripts/check_tokenizer_hf_alignment.sh
+	    scripts/prepare_arcc_jsonl.py
+	    scripts/prepare_mcq_jsonl.py
+	    scripts/prepare_qnli_jsonl.py
+	    scripts/check_peft_lora_step_fixture.sh
     scripts/run_training_smoke.sh
     scripts/run_training_real_assets.sh
     scripts/android/android_env.sh
@@ -294,6 +299,31 @@ check_shell_syntax() {
   say "[OK]   Maintained shell entrypoints pass bash -n"
 }
 
+check_python_syntax() {
+  local files=(
+    scripts/asset_paths.py
+    scripts/generate_lm_alignment_fixture.py
+    scripts/generate_peft_lora_step_fixture.py
+    scripts/generate_tokenizer_hf_golden_fixtures.py
+    scripts/prepare_arcc_jsonl.py
+    scripts/prepare_mcq_jsonl.py
+    scripts/prepare_qnli_jsonl.py
+    scripts/pretokenize_wikitext2_gemma.py
+  )
+  (
+    cd "$ROOT"
+    python3 - "${files[@]}" <<'PY'
+import pathlib
+import sys
+
+for path in sys.argv[1:]:
+    source = pathlib.Path(path).read_text(encoding="utf-8")
+    compile(source, path, "exec")
+PY
+  )
+  say "[OK]   Maintained Python entrypoints pass py_compile"
+}
+
 check_tokenizer_alignment_gate() {
   if [ "${MFT_RUN_TOKENIZER_ALIGNMENT:-}" != "1" ] &&
      [ -z "${MFT_MODEL_ROOT:-}" ] &&
@@ -318,6 +348,7 @@ check_no_cjk_text_in_maintained_tree
 check_no_generated_caches
 check_no_stale_operator_api
 check_shell_syntax
+check_python_syntax
 check_tokenizer_alignment_gate
 
 if [ "$fail" -ne 0 ]; then

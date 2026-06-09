@@ -7,29 +7,6 @@
 
 namespace ops {
 
-namespace {
-
-int count_valid_shifted_labels(const TensorPtr& labels, int ignore_index) {
-    if (!labels || labels->ndim() != 2 || labels->dtype() != kInt32) {
-        return 0;
-    }
-    const auto& shape = labels->shape();
-    const int64_t B = shape[0];
-    const int64_t S = shape[1];
-    const int32_t* data = labels->data<int32_t>();
-    int valid = 0;
-    for (int64_t b = 0; b < B; ++b) {
-        for (int64_t s = 1; s < S; ++s) {
-            if (data[b * S + s] != ignore_index) {
-                ++valid;
-            }
-        }
-    }
-    return valid;
-}
-
-}  // namespace
-
 AutoTrainer::AutoTrainer(AutoModelForCausalLM& model,
                          const AutoTrainerConfig& config)
     : model_(model), config_(config) {
@@ -85,6 +62,43 @@ AutoTrainStepResult AutoTrainer::train_step(const CausalLMBatch& batch) {
         throw std::invalid_argument("AutoTrainer::train_step received an incomplete CausalLMBatch");
     }
     return train_step(batch.input_ids, batch.attention_mask, batch.labels);
+}
+
+AutoFitResult AutoTrainer::fit(BatchProvider& provider,
+                               const AutoFitConfig& fit_config,
+                               AutoFitStepCallback on_step) {
+    if (fit_config.max_steps <= 0) {
+        throw std::invalid_argument("AutoTrainer::fit requires max_steps > 0");
+    }
+    if (fit_config.batch_size == 0) {
+        throw std::invalid_argument("AutoTrainer::fit requires batch_size > 0");
+    }
+
+    AutoFitResult result;
+    float loss_sum = 0.0f;
+    for (int step = 1; step <= fit_config.max_steps; ++step) {
+        CausalLMBatch batch = provider.next_batch(fit_config.batch_size, fit_config.loop_dataset);
+        if (!batch.input_ids) {
+            result.stopped_early = true;
+            break;
+        }
+
+        AutoTrainStepResult step_result = train_step(batch);
+        result.completed_steps += 1;
+        result.final_loss = step_result.loss;
+        result.trainable_tensor_count = step_result.trainable_tensor_count;
+        result.total_valid_label_count += step_result.valid_label_count;
+        loss_sum += step_result.loss;
+
+        if (on_step) {
+            on_step(AutoFitStep{result.completed_steps, step_result});
+        }
+    }
+
+    if (result.completed_steps > 0) {
+        result.mean_loss = loss_sum / static_cast<float>(result.completed_steps);
+    }
+    return result;
 }
 
 }  // namespace ops
