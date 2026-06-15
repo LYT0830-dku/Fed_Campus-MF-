@@ -14,8 +14,10 @@ ModelRegistry      -> model family, asset paths, default LoRA targets
 ModelFamilyAdapter -> family-specific load layout and LoRA target policy
 TokenizerFactory   -> model-specific tokenizer through one interface
 make_causal_lm_batch -> text/token rows to input_ids, attention_mask, labels
+make_preference_batch -> prompt/chosen/rejected rows to response-masked pairs
 AutoModelForCausalLM -> concrete graph dispatch + SafeTensors loading + LoRA
-AutoTrainer       -> shared one-step causal-LM LoRA training core
+AutoTrainer        -> SFT causal-LM LoRA training core
+DPOTrainer         -> preference-pair LoRA training core
 Graph class        -> GPT-2 / Gemma / Qwen / Llama forward and backward math
 SafeTensorsLoader  -> external checkpoint tensors into graph weights
 LoRA modules       -> trainable adapters on named target projections
@@ -112,6 +114,34 @@ Prepared task JSONL follows a separate but compatible contract:
 ignores `mask` and constructs labels from every real shifted token, with padding
 positions left at `-100`.
 
+Build a DPO preference batch:
+
+```cpp
+ops::PreferenceBatchConfig pref_cfg;
+pref_cfg.sequence_length = 256;
+auto batch = ops::make_preference_batch(
+    *tokenizer,
+    {
+        {
+            "Prompt text",
+            "Preferred response",
+            "Rejected response",
+            true,
+            -12.3f,
+            -13.1f,
+        },
+    },
+    pref_cfg);
+```
+
+`PreferenceBatch` owns chosen/rejected `input_ids`, `attention_mask`, and
+`response_mask` tensors. It can also carry cached frozen-reference sequence
+log-probabilities. Cached reference logps are the recommended mobile contract:
+the phone trains the policy LoRA adapters while treating reference scores as
+constants. If cached logps are absent, `DPOTrainer` can use a separate frozen
+reference model, but that doubles model forward work and increases memory
+pressure.
+
 ## Model Graph Layer
 
 Each supported architecture has a graph class under `operator/finetune_ops/graph`:
@@ -158,6 +188,30 @@ AutoModelForCausalLM::forward
         v
 lm_cross_entropy -> backward -> grad clip -> Adam -> zero_grad
 ```
+
+`DPOTrainer` is the parallel preference-training core:
+
+```text
+chosen/rejected input_ids + attention_mask + response_mask
+        |
+        v
+AutoModelForCausalLM::forward_hidden
+        |
+        v
+streaming_dpo_loss_with_ref_logps -> backward -> grad clip -> Adam -> zero_grad
+```
+
+The DPO objective is:
+
+```text
+-logsigmoid(beta * ((logp_pi(chosen) - logp_pi(rejected))
+                  - (logp_ref(chosen) - logp_ref(rejected))))
+```
+
+Gradients flow only through the policy path. Reference logits or cached
+reference logps are treated as frozen constants. The default DPO loss streams
+the LM head over response tokens, preserving the dense-logits DPO objective
+without allocating a full `[batch, sequence, vocab]` tensor.
 
 Application code can pass raw tensors, a `CausalLMBatch`, or a `BatchProvider`
 for a maintained multi-step loop:

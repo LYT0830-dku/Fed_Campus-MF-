@@ -142,12 +142,42 @@ try (MobileFineTuner mf = MobileFineTuner.open(modelDir, true)) {
 }
 ```
 
+For the preference-optimization path, callers provide prompt/chosen/rejected
+text pairs and cached reference log-probabilities. The SDK tokenizes the text,
+builds response masks, runs the DPO loss, backpropagates through the policy
+LoRA adapters, and applies the optimizer step:
+
+```java
+try (MobileFineTuner mf = MobileFineTuner.open(modelDir, true)) {
+    mf.initLora(MobileFineTuner.LoraConfig.attentionQkvo());
+    mf.createDpoTrainer(MobileFineTuner.DpoTrainerConfig.defaults());
+
+    MobileFineTuner.PreferenceStepResult result = mf.trainPreferenceBatch(
+            prompts,
+            chosenResponses,
+            rejectedResponses,
+            refChosenLogps,
+            refRejectedLogps,
+            64,
+            true  // appendEosToResponse
+    );
+
+    float loss = result.loss;
+    float rewardMargin = result.rewardMargin;
+}
+```
+
+The Java DPO API intentionally uses cached reference log-probabilities. This is
+the mobile-friendly path because it trains only the policy adapters on device.
+The C++ API also supports an in-process reference model for parity experiments,
+but that doubles model residency and is usually too expensive for phone runs.
+
 Call order:
 
 1. `MobileFineTuner.open(modelDir, loadWeights)`
 2. `initLora(...)`
-3. `createTrainer(...)`
-4. `trainStep(...)` or `trainTextBatch(...)`
+3. `createTrainer(...)` for SFT or `createDpoTrainer(...)` for DPO
+4. `trainStep(...)`, `trainTextBatch(...)`, or `trainPreferenceBatch(...)`
 5. `close()`
 
 `inputIds`, `attentionMask`, and `labels` are flattened row-major arrays with
@@ -179,7 +209,8 @@ cd android-visualizer
 
 The smoke test does not require external model weights. It creates a small
 temporary HuggingFace-style config in app-private storage, initializes LoRA, and
-executes one native `AutoTrainer` step.
+executes one native `AutoTrainer` step and one cached-reference `DPOTrainer`
+step.
 
 When real model assets are staged on the device, the same instrumentation suite
 can exercise the SDK open/init/train-text path for current families. Provide one
@@ -256,7 +287,7 @@ Java MobileFineTuner
 libmobilefinetuner_jni.so
         |
         v
-ops::AutoModelForCausalLM + ops::AutoTrainer
+ops::AutoModelForCausalLM + ops::AutoTrainer / ops::DPOTrainer
 ```
 
 The Android layer does not duplicate model math. All forward, loss, backward,

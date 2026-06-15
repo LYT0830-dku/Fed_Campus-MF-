@@ -27,9 +27,10 @@ referenced shard files. See `docs/MODEL_ASSETS.md` for the asset contract.
 
 Applications should discover model and tokenizer assets through the public
 registry APIs instead of hard-coding per-model training directories. For common
-fine-tuning code, use `AutoModelForCausalLM` and `AutoTrainer` so the application
-does not branch manually between supported GPT-2, Gemma, Qwen, and validated
-experimental Llama graph classes.
+fine-tuning code, use `AutoModelForCausalLM` with `AutoTrainer` for SFT or
+`DPOTrainer` for preference optimization so the application does not branch
+manually between supported GPT-2, Gemma, Qwen, and validated experimental Llama
+graph classes.
 
 ```cpp
 #include "mobile_finetuner/mobile_finetuner.h"
@@ -99,6 +100,60 @@ By default it computes the same dense causal-LM objective through
 `[batch, sequence, vocab]` logits tensor on mobile devices. Set
 `AutoTrainerConfig::use_streaming_lm_loss = false` only when debugging against a
 dense-logits reference path.
+
+## DPO Training API
+
+MobileFineTuner supports two maintained training objectives:
+
+- SFT: supervised causal-LM cross entropy through `AutoTrainer`.
+- DPO: Direct Preference Optimization through `DPOTrainer`.
+
+DPO uses a different data contract from SFT. Each sample must provide one prompt,
+one preferred response, and one rejected response. MF tokenizes the two branches
+separately, builds a response-only mask, and applies the standard causal shift:
+policy logits at position `s` score token `input_ids[s + 1]`, while
+`response_mask[s + 1]` decides whether that token contributes to the preference
+log probability.
+
+```cpp
+auto tokenizer = ops::TokenizerFactory::from_pretrained(model_dir);
+auto policy = ops::AutoModelForCausalLM::from_pretrained(model_dir);
+policy->init_lora(ops::AutoLoraConfig::attention_qkvo());
+
+ops::PreferenceBatchConfig pref_cfg;
+pref_cfg.sequence_length = 256;
+pref_cfg.append_eos_to_response = true;
+
+std::vector<ops::PreferenceSample> pairs = {
+    {
+        "Question: How should I start training?",
+        "Start with a short, consistent plan and increase volume gradually.",
+        "Do the hardest workout every day.",
+        true,
+        -34.2f,
+        -35.8f,
+    },
+};
+auto pref_batch = ops::make_preference_batch(*tokenizer, pairs, pref_cfg);
+
+ops::DPOTrainerConfig dpo_cfg;
+dpo_cfg.learning_rate = 2e-4f;
+dpo_cfg.beta = 0.1f;
+ops::DPOTrainer dpo(*policy, dpo_cfg);
+auto dpo_step = dpo.train_step(pref_batch);
+```
+
+The preferred mobile path is cached-reference DPO: store
+`ref_chosen_logp` and `ref_rejected_logp` per pair, then train only the policy
+LoRA adapters on device. If cached reference log probabilities are not present,
+construct `DPOTrainer(policy_model, reference_model, config)` with a frozen
+reference model. That path is useful for parity checks, but it is heavier
+because it runs reference forward passes.
+
+By default `DPOTrainer` uses `streaming_dpo_loss_with_ref_logps`, which avoids
+materializing `[batch, sequence, vocab]` logits for the policy path. Set
+`DPOTrainerConfig::use_streaming_dpo_loss = false` only when comparing against a
+dense-logits reference implementation.
 
 Use `named_trainable_parameters()` when exporting adapters, debugging PEFT
 alignment, or comparing optimizer-step fixtures. The names are stable internal

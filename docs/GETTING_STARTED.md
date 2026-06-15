@@ -57,6 +57,44 @@ auto batch = ops::make_causal_lm_batch(
 auto result = trainer.train_step(batch);
 ```
 
+Minimal DPO LoRA step:
+
+```cpp
+auto tokenizer = ops::TokenizerFactory::from_pretrained(model_dir);
+
+auto policy = ops::AutoModelForCausalLM::from_pretrained(model_dir);
+policy->init_lora(ops::AutoLoraConfig::attention_qkvo());
+
+ops::PreferenceBatchConfig pref_cfg;
+pref_cfg.sequence_length = 256;
+
+auto pref_batch = ops::make_preference_batch(
+    *tokenizer,
+    {
+        {
+            "Prompt text",
+            "Preferred response",
+            "Rejected response",
+            true,
+            -12.3f,
+            -13.1f,
+        },
+    },
+    pref_cfg
+);
+
+ops::DPOTrainerConfig dpo_cfg;
+dpo_cfg.learning_rate = 2e-4f;
+dpo_cfg.beta = 0.1f;
+ops::DPOTrainer dpo(*policy, dpo_cfg);
+auto dpo_result = dpo.train_step(pref_batch);
+```
+
+The two maintained objectives are SFT and DPO. Use SFT for supervised
+causal-LM labels. Use DPO when the dataset contains preference pairs:
+`prompt`, `chosen`, and `rejected`. The recommended mobile DPO path stores
+cached frozen-reference log probabilities with each pair.
+
 Recommended CMake consumer setup:
 
 ```cmake

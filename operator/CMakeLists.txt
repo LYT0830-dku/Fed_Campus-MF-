@@ -105,6 +105,7 @@ set(FINETUNE_SOURCES
     finetune_ops/core/step_arena.cpp
     finetune_ops/core/utils.cpp
     finetune_ops/core/lm_loss.cpp
+    finetune_ops/core/dpo_loss.cpp
     finetune_ops/core/memory_efficient_attention.cpp
     finetune_ops/core/performance_monitor.cpp
     finetune_ops/core/tokenizer.cpp
@@ -125,6 +126,7 @@ set(FINETUNE_SOURCES
     finetune_ops/graph/qwen_model.cpp
     finetune_ops/data/mmlu_dataset.cpp
     finetune_ops/data/causal_lm_batch.cpp
+    finetune_ops/data/preference_batch.cpp
     finetune_ops/data/batch_provider.cpp
     
     # Stage B: data loading and training
@@ -134,6 +136,7 @@ set(FINETUNE_SOURCES
     finetune_ops/optim/adam.cpp
     finetune_ops/optim/trainer.cpp
     finetune_ops/optim/auto_trainer.cpp
+    finetune_ops/optim/dpo_trainer.cpp
     
     # Stage C: LoRA save/load
     finetune_ops/graph/lora_saver.cpp
@@ -240,6 +243,7 @@ install(DIRECTORY
 install(FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/adam.h
     ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/auto_trainer.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/dpo_trainer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/gemma_trainer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/optimizer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/trainer.h
@@ -466,6 +470,14 @@ if(BUILD_TESTS)
         add_test(NAME GPT2LoRATwoStepSmoke COMMAND test_gpt2_lora_two_step_smoke)
     endif()
 
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/test_dpo_trainer.cpp)
+        add_executable(test_dpo_trainer
+            finetune_ops/optim/test_dpo_trainer.cpp
+        )
+        target_link_libraries(test_dpo_trainer operators)
+        add_test(NAME DPOTrainer COMMAND test_dpo_trainer)
+    endif()
+
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/graph/test_gemma_lora_roundtrip.cpp)
         add_executable(test_gemma_lora_roundtrip
             finetune_ops/graph/test_gemma_lora_roundtrip.cpp
@@ -522,6 +534,14 @@ if(BUILD_TESTS)
         add_test(NAME SelectedTokenLMLoss COMMAND test_selected_token_lm_loss)
     endif()
 
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/core/test_dpo_loss.cpp)
+        add_executable(test_dpo_loss
+            finetune_ops/core/test_dpo_loss.cpp
+        )
+        target_link_libraries(test_dpo_loss operators)
+        add_test(NAME DPOLoss COMMAND test_dpo_loss)
+    endif()
+
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/core/test_tokenizer_factory.cpp)
         add_executable(test_tokenizer_factory
             finetune_ops/core/test_tokenizer_factory.cpp
@@ -555,6 +575,14 @@ if(BUILD_TESTS)
         )
         target_link_libraries(test_causal_lm_batch operators)
         add_test(NAME CausalLMBatch COMMAND test_causal_lm_batch)
+    endif()
+
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/data/test_preference_batch.cpp)
+        add_executable(test_preference_batch
+            finetune_ops/data/test_preference_batch.cpp
+        )
+        target_link_libraries(test_preference_batch operators)
+        add_test(NAME PreferenceBatch COMMAND test_preference_batch)
     endif()
 
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/graph/test_gemma_config.cpp)

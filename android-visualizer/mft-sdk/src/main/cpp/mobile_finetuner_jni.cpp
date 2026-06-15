@@ -10,6 +10,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -18,6 +19,7 @@ struct NativeSession {
     std::unique_ptr<ops::AutoModelForCausalLM> model;
     std::unique_ptr<ops::Tokenizer> tokenizer;
     std::unique_ptr<ops::AutoTrainer> trainer;
+    std::unique_ptr<ops::DPOTrainer> dpo_trainer;
     std::string model_dir;
 };
 
@@ -192,7 +194,7 @@ void fill_parameters(ops::AutoModelForCausalLM& model, float value) {
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeBuildInfo(JNIEnv* env, jclass) {
-    return env->NewStringUTF("MobileFineTuner Android SDK JNI: AutoModelForCausalLM + AutoTrainer");
+    return env->NewStringUTF("MobileFineTuner Android SDK JNI: AutoModelForCausalLM + AutoTrainer + DPOTrainer");
 }
 
 extern "C" JNIEXPORT jdoubleArray JNICALL
@@ -348,6 +350,37 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeCreateTrainer(
     });
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeCreateDpoTrainer(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jfloat learning_rate,
+        jfloat weight_decay,
+        jfloat max_grad_norm,
+        jfloat beta,
+        jboolean use_streaming_dpo_loss,
+        jint gradient_accumulation_steps) {
+    guarded_void(env, [&]() {
+        NativeSession* session = require_session(env, handle);
+        if (session == nullptr) {
+            return;
+        }
+        if (!session->model) {
+            throw std::runtime_error("Model is not initialized");
+        }
+
+        ops::DPOTrainerConfig config;
+        config.learning_rate = learning_rate;
+        config.weight_decay = weight_decay;
+        config.max_grad_norm = max_grad_norm;
+        config.beta = beta;
+        config.use_streaming_dpo_loss = use_streaming_dpo_loss == JNI_TRUE;
+        config.gradient_accumulation_steps = gradient_accumulation_steps;
+        session->dpo_trainer = std::make_unique<ops::DPOTrainer>(*session->model, config);
+    });
+}
+
 extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainStep(
         JNIEnv* env,
@@ -452,6 +485,93 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainTextBatch(
             result.optimizer_step ? 1.0 : 0.0
         };
         return make_double_array(env, values, 7);
+    }, static_cast<jdoubleArray>(nullptr));
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainPreferenceBatch(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jobjectArray prompts,
+        jobjectArray chosen,
+        jobjectArray rejected,
+        jfloatArray ref_chosen_logps,
+        jfloatArray ref_rejected_logps,
+        jint sequence_length,
+        jboolean append_eos_to_response) {
+    return guarded(env, [&]() -> jdoubleArray {
+        NativeSession* session = require_session(env, handle);
+        if (session == nullptr) {
+            return nullptr;
+        }
+        if (!session->dpo_trainer) {
+            throw std::runtime_error("DPO trainer is not initialized; call createDpoTrainer first");
+        }
+        if (sequence_length <= 1) {
+            throw std::invalid_argument("sequenceLength must be > 1");
+        }
+
+        auto prompt_rows = copy_string_array(env, prompts, "prompts");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto chosen_rows = copy_string_array(env, chosen, "chosen");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto rejected_rows = copy_string_array(env, rejected, "rejected");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        if (chosen_rows.size() != prompt_rows.size() || rejected_rows.size() != prompt_rows.size()) {
+            throw std::invalid_argument("preference text arrays must have the same length");
+        }
+
+        const int64_t count = static_cast<int64_t>(prompt_rows.size());
+        auto ref_chosen = copy_float_array(env, ref_chosen_logps, count, "refChosenLogps");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto ref_rejected = copy_float_array(env, ref_rejected_logps, count, "refRejectedLogps");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+
+        std::vector<ops::PreferenceSample> samples;
+        samples.reserve(prompt_rows.size());
+        for (size_t i = 0; i < prompt_rows.size(); ++i) {
+            ops::PreferenceSample sample;
+            sample.prompt = std::move(prompt_rows[i]);
+            sample.chosen = std::move(chosen_rows[i]);
+            sample.rejected = std::move(rejected_rows[i]);
+            sample.has_reference_logps = true;
+            sample.ref_chosen_logp = ref_chosen[i];
+            sample.ref_rejected_logp = ref_rejected[i];
+            samples.push_back(std::move(sample));
+        }
+
+        ops::PreferenceBatchConfig batch_cfg;
+        batch_cfg.sequence_length = sequence_length;
+        batch_cfg.append_eos_to_response = append_eos_to_response == JNI_TRUE;
+        auto batch = ops::make_preference_batch(require_tokenizer(*session), samples, batch_cfg);
+        const ops::DPOTrainStepResult result = session->dpo_trainer->train_step(batch);
+
+        jdouble values[12] = {
+            static_cast<jdouble>(result.loss),
+            static_cast<jdouble>(result.trainable_tensor_count),
+            static_cast<jdouble>(result.pair_count),
+            static_cast<jdouble>(result.valid_response_token_count),
+            static_cast<jdouble>(result.accumulated_loss),
+            static_cast<jdouble>(result.chosen_reward),
+            static_cast<jdouble>(result.rejected_reward),
+            static_cast<jdouble>(result.reward_margin),
+            static_cast<jdouble>(result.reward_accuracy),
+            static_cast<jdouble>(result.accumulation_step),
+            static_cast<jdouble>(result.gradient_accumulation_steps),
+            result.optimizer_step ? 1.0 : 0.0
+        };
+        return make_double_array(env, values, 12);
     }, static_cast<jdoubleArray>(nullptr));
 }
 

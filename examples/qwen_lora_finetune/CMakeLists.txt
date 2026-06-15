@@ -22,10 +22,16 @@ add_executable(train_mmlu
 )
 target_link_libraries(train_mmlu PRIVATE operators)
 
+add_executable(train_dpo
+    src/dpo_main.cpp
+)
+target_link_libraries(train_dpo PRIVATE operators)
+
 if(APPLE)
     find_library(ACCELERATE_LIBRARY Accelerate)
     if(ACCELERATE_LIBRARY)
         target_link_libraries(train_wikitext PRIVATE ${ACCELERATE_LIBRARY})
         target_link_libraries(train_mmlu PRIVATE ${ACCELERATE_LIBRARY})
+        target_link_libraries(train_dpo PRIVATE ${ACCELERATE_LIBRARY})
     endif()
 endif()

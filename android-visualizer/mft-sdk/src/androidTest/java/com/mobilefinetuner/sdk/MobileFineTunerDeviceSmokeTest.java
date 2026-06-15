@@ -39,14 +39,7 @@ public final class MobileFineTunerDeviceSmokeTest {
         Context context = ApplicationProvider.getApplicationContext();
         File modelDir = new File(context.getFilesDir(), "mft_sdk_text_batch_gpt2");
         deleteRecursively(modelDir);
-        assertTrue(modelDir.mkdirs());
-        writeFile(new File(modelDir, "config.json"),
-                "{\"model_type\":\"gpt2\",\"vocab_size\":50257,\"n_positions\":8,"
-                        + "\"n_embd\":8,\"n_layer\":1,\"n_head\":2}");
-        writeFile(new File(modelDir, "vocab.json"),
-                "{\"H\":0,\"e\":1,\"<|endoftext|>\":50256}");
-        writeFile(new File(modelDir, "merges.txt"), "#version: 0.2\n");
-        writeFile(new File(modelDir, "tokenizer.json"), "{\"model\":{\"type\":\"BPE\"}}");
+        createTinyGpt2TextModel(modelDir);
 
         try (MobileFineTuner mf = MobileFineTuner.open(modelDir.getAbsolutePath(), false)) {
             mf.initLora(new MobileFineTuner.LoraConfig(
@@ -62,6 +55,43 @@ public final class MobileFineTunerDeviceSmokeTest {
             assertTrue(Float.isFinite(result.loss));
             assertTrue(result.trainableTensorCount > 0);
             assertTrue(result.validLabelCount > 0);
+        }
+    }
+
+    @Test
+    public void preferenceBatchTrainingUsesNativeTokenizerAndDpoTrainer() throws IOException {
+        Context context = ApplicationProvider.getApplicationContext();
+        File modelDir = new File(context.getFilesDir(), "mft_sdk_dpo_batch_gpt2");
+        deleteRecursively(modelDir);
+        createTinyGpt2TextModel(modelDir);
+
+        try (MobileFineTuner mf = MobileFineTuner.open(modelDir.getAbsolutePath(), false)) {
+            mf.initLora(new MobileFineTuner.LoraConfig(
+                    2,
+                    4.0f,
+                    0.0f,
+                    7L,
+                    new String[]{"q_proj", "k_proj", "v_proj", "o_proj"}
+            ));
+            mf.createDpoTrainer(new MobileFineTuner.DpoTrainerConfig(
+                    1e-3f,
+                    0.0f,
+                    1.0f,
+                    0.1f
+            ));
+            MobileFineTuner.PreferenceStepResult result =
+                    mf.trainPreferenceBatch(
+                            new String[]{"H"},
+                            new String[]{"e"},
+                            new String[]{"H"},
+                            new float[]{-1.0f},
+                            new float[]{-1.2f},
+                            4
+                    );
+            assertTrue(Float.isFinite(result.loss));
+            assertTrue(result.trainableTensorCount > 0);
+            assertTrue(result.pairCount == 1);
+            assertTrue(result.validResponseTokenCount > 0);
         }
     }
 
@@ -116,6 +146,17 @@ public final class MobileFineTunerDeviceSmokeTest {
         try (FileWriter writer = new FileWriter(file)) {
             writer.write(content);
         }
+    }
+
+    private static void createTinyGpt2TextModel(File modelDir) throws IOException {
+        assertTrue(modelDir.mkdirs());
+        writeFile(new File(modelDir, "config.json"),
+                "{\"model_type\":\"gpt2\",\"vocab_size\":50257,\"n_positions\":8,"
+                        + "\"n_embd\":8,\"n_layer\":1,\"n_head\":2}");
+        writeFile(new File(modelDir, "vocab.json"),
+                "{\"H\":0,\"e\":1,\"<|endoftext|>\":50256}");
+        writeFile(new File(modelDir, "merges.txt"), "#version: 0.2\n");
+        writeFile(new File(modelDir, "tokenizer.json"), "{\"model\":{\"type\":\"BPE\"}}");
     }
 
     private static void deleteRecursively(File file) {
